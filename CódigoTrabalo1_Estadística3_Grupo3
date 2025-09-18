@@ -1,0 +1,151 @@
+# LIBRERIAS Y PAQUETES ----------------------------------------------------------
+rm(list=ls(all=TRUE))
+library(TSA)
+library(forecast)
+library(fANCOVA)
+
+# Funciones del profesor (se cargan desde GitHub)
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Descomp.Loessv02.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-SuavizamientoEstacional.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Mipoly.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-interpdeltas.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-Criterios.Informacion-Calidad.Intervalos.R")
+
+# LECTURA DE DATOS --------------------------------------------------------------
+Datos7 = read.table("anex-EMC-SeriesIndiceEmpalmadosLineadeMercancia-may2025.csv",
+                    header=TRUE, sep=";", skip=15, dec=",",
+                    colClasses=c(rep("NULL",8),"numeric",rep("NULL",13)))
+Datos7 = ts(Datos7, freq=12, start=c(2001,1))
+windows()
+plot(Datos7, main="Prendas de vestir y textiles (Escala Original)")
+
+# DEFINICION DE VARIABLES ------------------------------------------------------
+m=12                    # Validación cruzada con 12 periodos
+s=11                    # Estacionalidad (ene–nov)
+n=length(Datos7)-m
+t=1:n
+
+yt=ts(Datos7[t],freq=12,start=c(2001,1)) 
+mes=seasonaldummy(yt)   # Indicadoras estacionales enero–nov
+
+# Polinomio grado 1
+poli1=Mipoly(tiempo=t,grado=1)
+
+# Matriz de diseño para ajuste
+X1=data.frame(poli1,mes)
+
+# Para pronóstico
+tnuevo=(n+1):length(Datos7)
+ytnuevo=ts(Datos7[tnuevo],freq=12,start=c(2024,6)) 
+mesnuevo=seasonaldummy(yt,h=12)
+poli1nuevo=Mipoly(tiempo=tnuevo,grado=1)
+X1nuevo=data.frame(poli1nuevo,mesnuevo)
+
+# ANALISIS DESCRIPTIVO ---------------------------------------------------------
+win.graph(); plot(Datos7, main="Serie en escala original", ylab="Indice")
+
+win.graph(); periodogram(diff(Datos7),lwd=4); abline(v=c(1:6)/12,col=2,lty=2)
+
+win.graph(); boxplot(Datos7~cycle(Datos7), main="Boxplot estacional por mes")
+
+win.graph(); plot(decompose(Datos7, type="multiplicative")$trend,
+                  ylim=c(min(Datos7),max(Datos7)),lwd=4,
+                  main="Tendencia (descomposición multiplicativa)")
+
+# ----- MODELO 1: POLINOMIAL GRADO 1 ------------------------------------------
+modelo1=lm(yt~.,data=X1)
+summary(modelo1)
+
+ythat1=ts(fitted(modelo1),freq=12,start=start(yt))
+
+win.graph(); plot(Datos7); lines(ythat1,col=2,lwd=2)
+legend("topleft",legend=c("Original","Modelo 1 (polinomial g1)"),col=c(1,2),lty=1)
+
+npar1=length(coef(modelo1)[coef(modelo1)!=0])
+Criterios1=exp.crit.inf.resid(residuales=residuals(modelo1),n.par=npar1)
+
+pronmodelo1=predict(modelo1,newdata=X1nuevo,interval="prediction",level=0.95)
+pronmodelo1=ts(pronmodelo1,freq=12,start=start(ytnuevo))
+ytpron1=pronmodelo1[,1]
+
+accuracy(ytpron1,ytnuevo)
+amplcobmodelo1=amplitud.cobertura(ytnuevo,pronmodelo1[,2],pronmodelo1[,3])
+ScoreIP1=IntervalScore(ytnuevo,pronmodelo1[,2],pronmodelo1[,3],alpha=0.05)
+
+win.graph(); plot.ts(residuals(modelo1))
+abline(h=c(-2*summary(modelo1)$sigma,0,2*summary(modelo1)$sigma),col=2)
+
+# ----- MODELO 2: HOLT-WINTERS MULTIPLICATIVO ---------------------------------
+modelo2=SuavizamientoEstacional(yt,seasonal="multiplicative",h=12,
+                                beta=1e-5,gamma=1e-5)
+ythat2=fitted(modelo2)
+
+win.graph(); plot(Datos7); lines(ythat2,col=2,lwd=2)
+legend("topleft",legend=c("Original","Modelo 2 (HW mult)"),col=c(1,2),lty=1)
+
+npar2=(s-1)+2
+Criterios2=exp.crit.inf.resid(residuals(modelo2),n.par=npar2)
+
+pronmodelo2=modelo2$forecast
+ytpron2=pronmodelo2[,1]
+
+accuracy(ytpron2,ytnuevo)
+Amplcobmodelo2=amplitud.cobertura(ytnuevo,pronmodelo2[,2],pronmodelo2[,3])
+ScoreIP2=IntervalScore(ytnuevo,pronmodelo2[,2],pronmodelo2[,3],alpha=0.05)
+
+win.graph(); plot(residuals(modelo2))
+abline(h=c(-2*sqrt(modelo2$MSE),0,2*sqrt(modelo2$MSE)),col=2)
+
+# ----- MODELO 3: DLL (GCV) ---------------------------------------------------
+modelo3=Descomp.Loessv02(serie.ajuste=yt,tipo.descomp="multiplicative",
+                         grado=1,criterio="gcv",h=12,level=0.95)
+ythat3=fitted(modelo3)
+
+win.graph(); plot(Datos7); lines(ythat3,col=2,lwd=2)
+legend("topleft",legend=c("Original","Modelo 3 (DLL GCV)"),col=c(1,2),lty=1)
+
+npar3=modelo3$p
+Criterios3=exp.crit.inf.resid(residuals(modelo3),n.par=npar3)
+
+pronmodelo3=modelo3$forecast
+ytpron3=pronmodelo3[,1]
+
+accuracy(ytpron3,ytnuevo)
+Amplcobmodelo3=amplitud.cobertura(ytnuevo,pronmodelo3[,2],pronmodelo3[,3])
+ScoreIP3=IntervalScore(ytnuevo,pronmodelo3[,2],pronmodelo3[,3],alpha=0.05)
+
+win.graph(); plot(residuals(modelo3))
+abline(h=c(-2*sqrt(modelo3$MSE),0,2*sqrt(modelo3$MSE)),col=2)
+
+# ----- COMPARACION DE PRONOSTICOS --------------------------------------------
+win.graph()
+plot(ytnuevo,xaxt="n",ylim=c(min(ytnuevo,ytpron1,ytpron2,ytpron3),
+                             max(ytnuevo,ytpron1,ytpron2,ytpron3)+3),
+     type="b",pch=19,lwd=3)
+lines(ytpron1,type="b",pch=2,lty=2,lwd=3,col=2)
+lines(ytpron2,type="b",pch=3,lty=3,lwd=3,col=4)
+lines(ytpron3,type="b",pch=4,lty=4,lwd=3,col=6)
+axis(1,at=time(ytnuevo),
+     labels=paste0(month.abb[6:12],"-25"),cex.axis=0.7)
+legend("topleft",legend=c("Real","Modelo 1","Modelo 2","Modelo 3"),
+       pch=c(19,2:4),col=c(1,2,4,6),lwd=3,lty=1:4)
+
+# ----- TABLAS DE RESULTADOS --------------------------------------------------
+tabla.criterios=rbind(Criterios1,Criterios2,Criterios3)
+rownames(tabla.criterios)=c("Modelo 1","Modelo 2","Modelo 3")
+
+tabla.pronosticos=cbind(ytpron1,ytpron2,ytpron3)
+
+precision.puntuales=rbind(accuracy(ytpron1,ytnuevo),
+                          accuracy(ytpron2,ytnuevo),
+                          accuracy(ytpron3,ytnuevo))[,c(2,3,5)]
+
+precision.intervalos=rbind(amplcobmodelo1,Amplcobmodelo2,Amplcobmodelo3)
+
+tabla.precision=cbind(precision.puntuales,precision.intervalos)
+rownames(tabla.precision)=c("Modelo 1","Modelo 2","Modelo 3")
+
+# Exportar tablas
+write.csv2(tabla.criterios,"tabla_criterios_modelos.csv")
+write.csv2(tabla.pronosticos,"tabla_pronosticos.csv")
+write.csv2(tabla.precision,"tabla_precision.csv")
