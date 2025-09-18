@@ -1,0 +1,263 @@
+#LIBRERIAS Y PAQUETES ----------------------------------------------------------
+
+rm(list=ls(all=TRUE))
+library(TSA)
+library(forecast)
+library(fANCOVA)
+
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Descomp.Loessv02.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-SuavizamientoEstacional.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Mipoly.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-interpdeltas.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-Criterios.Informacion-Calidad.Intervalos.R")
+
+#Para leer "emmet-enero2001noviembre2021-elaboracion de bebidas-modif.csv", col 6: Produccion real
+Datos6=read.table(file.choose(),header=T,sep=";",skip=15,dec=",",colClasses=c(rep("NULL",5),"numeric",rep("NULL",5)))
+Datos6=ts(Datos6,freq=12,start=c(2001,1))
+plot(Datos6)
+
+#DEFINIENDO VARIABLES-----------------------------------------------------------
+
+#PARA AJUSTAR
+
+m=12                   #número de periodos a usar en validación cruzada con los pronósticos ex-post
+s=11                   #longitud periodo estacional
+n=length(Datos6)-m     #Tamaño de muestra de ajuste, se recorta en 12 datos la serie
+t=1:n                  #indice de tiempo en el ajuste
+
+yt=ts(Datos6[t],freq=12,start=c(2001,1))   #serie recortada a usar en el ajuste.
+mes=seasonaldummy(yt)                      #Matriz con las 11 primeras variables Indicadoras en el ajuste
+
+poli1=Mipoly(tiempo=t,grado=4) #Matriz con las potencias de t para el ajuste en el modelo 1 (ajuste argumento grado según su caso)
+poli2=Mipoly(tiempo=t,grado=5) #Matriz con las potencias de t para el ajuste en el modelo 2 (ajuste argumento grado según su caso)
+
+#Matriz de diseño en el ajuste del modelo 1 con las potencias de t en el polinomio e indicadoras para la estacionalidad
+X1=data.frame(poli1,mes)
+#Matriz de diseño en el ajuste del modelo 2 con las potencias de t en el polinomio e indicadoras para la estacionalidad
+X2=data.frame(poli2,mes)
+
+#PARA PRONOSTICAR 
+
+tnuevo=(n+1):length(Datos6)                            #indice de tiempo en los pronósticos
+ytnuevo=ts(Datos6[tnuevo],freq=12,start=c(2020,12))    #valores reales de la serie en los periodos a pronosticar con inicio en diciembre 2020
+mesnuevo=seasonaldummy(yt,h=12)                        #matriz con las 11 indicadoras para los tiempos de pronostico
+
+poli1nuevo=Mipoly(tiempo=tnuevo,grado=4)               #Matriz con las potencias de t para el pronóstico en el modelo 1 (ajuste argumento grado según su caso)
+poli2nuevo=Mipoly(tiempo=tnuevo,grado=5)               #Matriz con las potencias de t para el pronóstico en el modelo 2 (ajuste argumento grado según su caso)
+
+#Matriz de diseño en los pronósticos del modelo 1 con las potencias de t en el polinomio e indicadoras para la estacionalidad
+X1nuevo=data.frame(poli1nuevo,mesnuevo)
+#Matriz de diseño en los pronósticos del modelo 2 con las potencias de t en el polinomio e indicadoras para la estacionalidad
+X2nuevo=data.frame(poli2nuevo,mesnuevo)
+
+#--ANALISIS DESCRIPTIVO --------------------------------------------------------
+
+#Gráficos descriptivos
+win.graph()
+plot(Datos6, ylab="Datos6",main="Gráfica de la serie en escala original")
+
+win.graph()
+periodogram(diff(Datos6),lwd=4); abline(v=c(1:6)/12,col=2,lty=2) #periodograma señalando además frecuencias Fj=j=12, para j=1 a 6
+
+win.graph()
+boxplot(Datos6~cycle(Datos6)) #Box-plots de distribución de la serie según mes del año
+
+win.graph()
+plot(decompose(Datos6)$trend,ylim=c(min(Datos6),max(Datos6)),lwd=4) #Tendencia filtrada según descomposición aditiva
+
+#-----MODELO 1:POLINOMIAL-GRADO4------------------------------------------------
+
+modelo1=lm(yt~.,data=X1)
+summary(modelo1)
+
+ythat1=ts(fitted(modelo1),freq=12,start=start(yt)) #Valores ajustados del modelo 1
+
+#Gráfico ajuste del modelo 1
+win.graph()
+plot(Datos6)
+lines(ythat1,col=2,lwd=2)
+legend("topleft",legend=c("Original","Ajuste modelo 1"),lty=1,col=c(1,2))
+
+#Cálculo de los criterios AIC y BIC en modelo 1
+npar1=length(coef(modelo1)[coef(modelo1)!=0]);npar1 #Número de parámetros en modelo1
+Criterios1=exp.crit.inf.resid(residuales=residuals(modelo1),n.par=npar1);Criterios1
+
+#Pronosticos del modelo 1 en la escala original
+pronmodelo1=predict(modelo1,newdata=X1nuevo,interval="prediction",level=0.95)
+pronmodelo1=ts(pronmodelo1,freq=12,start=start(ytnuevo))
+pronmodelo1
+ytpron1=pronmodelo1[,1] #serie pronósticos puntuales modelo 1
+
+#precision pronósticos puntuales modelo 1
+accuracy(ytpron1,ytnuevo)
+
+#precision pronósticos por I.P del 95% modelo 1
+amplcobmodelo1=amplitud.cobertura(real=ytnuevo,LIP=pronmodelo1[,2],LSP=pronmodelo1[,3]);amplcobmodelo1
+ScoreIP1=IntervalScore(real=ytnuevo,LIP=pronmodelo1[,2],LSP=pronmodelo1[,3],alpha=0.05);ScoreIP1
+
+#Gráficos de residuos del modelo 1
+win.graph()
+plot.ts(residuals(modelo1),ylim=c(min(-2*summary(modelo1)$sigma,residuals(modelo1)),max(2*summary(modelo1)$sigma,residuals(modelo1))))
+abline(h=c(-2*summary(modelo1)$sigma,0,2*summary(modelo1)$sigma),col=2)
+win.graph()
+plot(fitted(modelo1),residuals(modelo1),ylim=c(min(-2*summary(modelo1)$sigma,residuals(modelo1)),max(2*summary(modelo1)$sigma,residuals(modelo1))))
+abline(h=c(-2*summary(modelo1)$sigma,0,2*summary(modelo1)$sigma),col=2)
+
+#-----MODELO 2:POLINOMIAL-GRADO5------------------------------------------------
+
+modelo2=lm(yt~.,data=X2)
+summary(modelo2)
+
+ythat2=ts(fitted(modelo2),freq=12,start=start(yt)) #Calculo valores ajustados del modelo 2
+
+#Gráfico ajuste del modelo 2
+win.graph()
+plot(Datos6)
+lines(ythat2,col=2,lwd=2)
+legend("topleft",legend=c("Original","Ajuste modelo 2"),lty=1,col=c(1,2))
+
+#Cálculo de los criterios AIC y BIC en modelo 2
+npar2=length(coef(modelo2)[coef(modelo2)!=0]);npar2 #Numero de parámetros en modelo2
+Criterios2=exp.crit.inf.resid(residuales=residuals(modelo2),n.par=npar2);Criterios2
+
+#Pronosticos del modelo 2 en la escala original
+pronmodelo2=predict(modelo2,newdata=X2nuevo,interval="prediction",level=0.95)
+pronmodelo2=ts(pronmodelo2,freq=12,start=start(ytnuevo))
+pronmodelo2
+ytpron2=pronmodelo2[,1] #serie pronósticos puntuales modelo 2
+
+#precision pronósticos puntuales modelo 2
+accuracy(ytpron2,ytnuevo)
+
+#precision pronósticos por I.P del 95% modelo 2
+amplcobmodelo2=amplitud.cobertura(real=ytnuevo,LIP=pronmodelo2[,2],LSP=pronmodelo2[,3]);amplcobmodelo2
+ScoreIP2=IntervalScore(real=ytnuevo,LIP=pronmodelo2[,2],LSP=pronmodelo2[,3],alpha=0.05);ScoreIP2
+
+#Gráficos de residuos del modelo 2
+win.graph()
+plot.ts(residuals(modelo2),ylim=c(min(-2*summary(modelo2)$sigma,residuals(modelo2)),max(2*summary(modelo2)$sigma,residuals(modelo2))))
+abline(h=c(-2*summary(modelo2)$sigma,0,2*summary(modelo2)$sigma),col=2)
+win.graph()
+plot(fitted(modelo2),residuals(modelo2) ,ylim=c(min(-2*summary(modelo2)$sigma,residuals(modelo2)),max(2*summary(modelo2)$sigma,residuals(modelo2))))
+abline(h=c(-2*summary(modelo2)$sigma,0,2*summary(modelo2)$sigma),col=2)
+
+#-----MODELO 3:SEHW ------------------------------------------------------------
+
+modelo3=SuavizamientoEstacional(yt,seasonal="additive",h=12)
+
+ythat3=fitted(modelo3) #valores ajustados. Ya tienen formato de serie de tiempo
+
+#Gráfico ajuste del modelo 3
+win.graph()
+plot(Datos6)
+lines(ythat3,col=2,lwd=2)
+legend("topleft",legend=c("Original","Ajuste modelo 3"),col=c(1,2),lty=1)
+
+#Calculando AIC y BIC en el modelo 3
+npar3=(s-1)+2; npar3 #Aprox. del número de parámetros del suavizamiento
+Criterios3=exp.crit.inf.resid(residuales=residuals(modelo3),n.par=npar3)
+Criterios3
+
+#Predicciones puntuales y por I.P del 95%
+pronmodelo3=modelo3$forecast
+pronmodelo3
+ytpron3=pronmodelo3[,1] #Separando los pronósticos puntuales
+ytpron3
+accuracy(ytpron3,ytnuevo) #Calculando exactitud de los pronósticos
+
+#precision pronósticos por I.P del 95% modelo 3
+Amplcobmodelo3=amplitud.cobertura(real=ytnuevo,LIP=pronmodelo3[,2],LSP=pronmodelo3[,3])
+Amplcobmodelo3
+ScoreIP3=IntervalScore(real=ytnuevo,LIP=pronmodelo3[,2],LSP=pronmodelo3[,3],alpha=0.05);ScoreIP3
+
+#Graficos de residuos
+MSE3=modelo3$MSE #MSE aproximado del ajuste total del Suavizamiento
+MSE3
+win.graph()
+plot(residuals(modelo3), ylim=c(min(-2*sqrt(MSE3),residuals(modelo3)),max(2*sqrt(MSE3),residuals(modelo3))))
+abline(h=c(-2*sqrt(MSE3),0,2*sqrt(MSE3)),col=2)
+win.graph()
+plot(as.numeric(fitted(modelo3)), residuals(modelo3),ylim=c(min(-2*sqrt(MSE3),residuals(modelo3)),max(2*sqrt(MSE3),residuals(modelo3))))
+abline(h=c(-2*sqrt(MSE3),0,2*sqrt(MSE3)),col=2)
+
+#-----MODELO 4:DLC(AICC) -------------------------------------------------------
+
+#Modelo 4: DLC(AICC) aditivo
+modelo4=Descomp.Loessv02(serie.ajuste=yt,tipo.descomp="additive",grado=2,criterio="aicc",h=12,level=0.95)
+
+#Valores ajustados
+ythat4=fitted(modelo4)
+
+#Gráfico ajuste del modelo 4
+win.graph()
+plot(Datos6)
+lines(ythat4,col=2,lwd=2)
+legend("topleft",legend=c("Original","Ajuste modelo 4"),col=c(1,2),lty=1)
+
+#Calculando AIC y BIC en el modelo 4
+npar4=modelo4$p #número aproximado de parámetros en el ajuste
+Criterios4=exp.crit.inf.resid(residuals(modelo4),n.par=npar4)
+Criterios4
+
+#Tabla con pronósticos puntuales y por I.P de la serie
+pronmodelo4=modelo4$forecast
+pronmodelo4
+ytpron4=pronmodelo4[,1] #serie pronósticos puntuales
+
+#Precision pronósticos puntuales
+accuracy(ytpron4,ytnuevo)
+Amplcobmodelo4=amplitud.cobertura(real=ytnuevo,LIP=pronmodelo4[,2],LSP=pronmodelo4[,3])
+Amplcobmodelo4
+ScoreIP4=IntervalScore(real=ytnuevo,LIP=pronmodelo4[,2],LSP=pronmodelo4[,3],alpha=0.05);ScoreIP4
+
+#Graficos de residuos de ajuste
+win.graph()
+plot(residuals(modelo4),ylim=c(min(-2*sqrt(modelo4$MSE),residuals(modelo4)),max(2*sqrt(modelo4$MSE),residuals(modelo4))))
+abline(h=c(-2*sqrt(modelo4$MSE),0,2*sqrt(modelo4$MSE)),col=2)
+win.graph()
+plot(as.numeric(fitted(modelo4)),residuals(modelo4),ylim=c(min(-2*sqrt(modelo4$MSE),residuals(modelo4)),max(2*sqrt(modelo4$MSE),residuals(modelo4))))
+abline(h=c(-2*sqrt(modelo4$MSE),0,2*sqrt(modelo4$MSE)),col=2)
+
+win.graph()
+plot(ytnuevo,xaxt="n",ylim=c(min(ytnuevo,ytpron1,ytpron2,ytpron3,ytpron4),max(ytnuevo,ytpron1,ytpron2,ytpron3,ytpron4)+15),type="b",pch=19,lwd=3)
+lines(ytpron1,type="b",pch=2,lty=2,lwd=3,col=2)
+lines(ytpron2,type="b",pch=3,lty=3,lwd=3,col=4)
+lines(ytpron3,type="b",pch=4,lty=4,lwd=3,col=5)
+lines(ytpron4,type="b",pch=5,lty=5,lwd=3,col=6)
+axis(1,at=time(ytnuevo),labels=paste0(paste0(month.abb[c(12,1:11)],"-"),c(20,rep(21,11))),cex.axis=0.7)
+legend("topleft",legend=c("Real","modelo 1","modelo 2","modelo 3","modelo 4"),pch=c(19,2:5),col=c(1,2,4:6),lwd=3,lty=c(1:5))
+
+#--TABLAS DE LAS MEDIDAS DE AJUSTE Y PRONOSTICOS DE LOS 4 MODELOS --------------
+
+Mod1=summary(modelo1)$coefficients
+Mod2=summary(modelo2)$coefficients
+
+tabla.parametros.globales=rbind(Mod1,NA,Mod2)
+tabla.parametros.globales
+
+#Tabulando medidas de ajuste
+tabla.criterios=rbind(Criterios1,Criterios2,Criterios3,Criterios4)
+rownames(tabla.criterios)=c("Modelo 1","Modelo 2","Modelo 3","Modelo 4")
+tabla.criterios
+
+#tabla resumen de pronosticos 
+tabla.pronosticos=cbind(ytpron1,ytpron2,ytpron3,ytpron4)
+tabla.pronosticos
+
+#Tabulando medidas de pronosticos
+precision.puntuales=rbind(accuracy(ytpron1,ytnuevo), accuracy(ytpron2,ytnuevo), accuracy(ytpron3,ytnuevo), accuracy(ytpron4,ytnuevo))[,c(2,3,5)]
+precision.intervalos=rbind(amplcobmodelo1,amplcobmodelo2,Amplcobmodelo3,c(NA,NA))
+
+tabla.precision=cbind(precision.puntuales,precision.intervalos)
+rownames(tabla.precision)=c("Modelo 1","Modelo 2","Modelo 3","Modelo 4")
+tabla.precision
+
+#Exportacion tablas al directorio de trabajo------------------------------------
+
+write.csv2(tabla.criterios,file="tabla1_criteriosdeajuste trabajo1.csv",row.names = TRUE)
+write.csv2(tabla.parametros.globales,file="tabla_ajuste modelosglobales trabajo1.csv",row.names = TRUE)
+write.csv2(modelo3$coefficients,file="tabla_ajuste modelo3 trabajo1.csv",row.names = TRUE)
+write.csv2(modelo4$deltasi,file="tabla_ajuste modelo4 trabajo1.csv",row.names = TRUE)
+write.csv2(tabla.precision,file="tabla2_medidasprecisiondepronosticos trabajo1.csv",row.names = TRUE)
+write.csv2(tabla.pronosticos,file="tabla_pronosticos trabajo1.csv",row.names = TRUE)
+
