@@ -5,6 +5,12 @@
 # Modelo 4: DLL(GCV) - Descomposición + LOESS Lineal con criterio GCV
 # =============================================================================
 
+# Instala los paquetes necesarios
+install.packages("TSA")
+install.packages("forecast")
+install.packages("fANCOVA")
+
+
 # PASO 1: CARGAR LIBRERÍAS Y FUNCIONES NECESARIAS ============================
 library(forecast)  # Para análisis de series temporales
 library(TSA)       # Para análisis de series (periodogramas, etc.)
