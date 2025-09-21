@@ -1,0 +1,671 @@
+# =============================================================================
+# TRABAJO No. 1 ESTADÍSTICA III - ANÁLISIS DE SERIES DE TIEMPO
+# GRUPO 3 - DATOS7: Prendas de vestir y textiles
+# Serie multiplicativa con indicadoras enero-noviembre, polinomio grado 1
+# Modelo 4: DLL(GCV) - Descomposición + LOESS Lineal con criterio GCV
+# =============================================================================
+
+# PASO 1: CARGAR LIBRERÍAS Y FUNCIONES NECESARIAS ============================
+library(forecast)  # Para análisis de series temporales
+library(TSA)       # Para análisis de series (periodogramas, etc.)
+library(fANCOVA)   # Para funciones LOESS avanzadas
+
+# Limpiar el espacio de trabajo
+rm(list=ls(all=TRUE))
+
+# Cargar las funciones del profesor desde GitHub
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Descomp.Loessv02.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-SuavizamientoEstacional.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Mipoly.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-regexponencialv02.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-predict_expo.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-interpdeltas.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-Criterios.Informacion-Calidad.Intervalos.R")
+
+# PASO 2: LECTURA DE DATOS ===================================================
+# Según la tabla 1, Datos7 corresponde a la columna 9 (Prendas de vestir y textiles)
+# del archivo anex-EMC-SeriesIndiceEmpalmadosLineadeMercancia-may2025.csv
+
+Datos7 = read.table(file.choose(), # Seleccionar el archivo CSV
+                   header = TRUE,   # Primera fila contiene encabezados
+                   sep = ";",       # Separador de columnas es punto y coma
+                   dec = ",",       # Separador decimal es coma
+                   skip = 10,       # Saltar las primeras 10 filas
+                   colClasses = c(rep("NULL", 8), "numeric", rep("NULL", 13))) # Solo leer columna 9
+
+# Convertir a objeto de serie temporal
+Datos7 = ts(Datos7, freq = 12, start = c(2013, 1)) # Frecuencia mensual desde enero 2013
+
+# Verificar los datos
+head(Datos7)
+length(Datos7) # Debería ser 149 observaciones (2013-2025)
+
+# PASO 3: ANÁLISIS DESCRIPTIVO ===============================================
+
+# 3.1 Gráfico de la serie original
+win.graph(width = 10, height = 6)
+plot(Datos7, 
+     main = "Serie Prendas de Vestir y Textiles - Escala Original",
+     ylab = "Índice", 
+     xlab = "Tiempo",
+     lwd = 2)
+grid()
+
+# 3.2 Gráfico de la serie en escala logarítmica (para series multiplicativas)
+win.graph(width = 10, height = 6)
+plot(log(Datos7), 
+     main = "Serie Prendas de Vestir y Textiles - Escala Logarítmica",
+     ylab = "Log(Índice)", 
+     xlab = "Tiempo",
+     lwd = 2)
+grid()
+
+# 3.3 Descomposición multiplicativa y extracción de tendencia
+descomp_mult = decompose(log(Datos7), type = "additive") # Aditiva en log = multiplicativa original
+Tt_log = descomp_mult$trend
+
+win.graph(width = 10, height = 6)
+plot(Tt_log, 
+     ylim = c(min(log(Datos7), na.rm = TRUE), max(log(Datos7), na.rm = TRUE)),
+     main = "Tendencia Extraída (Escala Logarítmica)",
+     ylab = "Log(Índice)",
+     xlab = "Tiempo",
+     lwd = 3,
+     col = "blue")
+lines(log(Datos7), col = "gray", lwd = 1)
+legend("topleft", 
+       legend = c("Tendencia", "Serie Original"), 
+       col = c("blue", "gray"), 
+       lwd = c(3, 1))
+grid()
+
+# 3.4 Boxplots estacionales (en escala log para serie multiplicativa)
+win.graph(width = 10, height = 6)
+boxplot(log(Datos7) ~ cycle(Datos7),
+        main = "Distribución Estacional - Prendas de Vestir y Textiles",
+        xlab = "Mes",
+        ylab = "Log(Índice)",
+        names = month.abb)
+grid()
+
+# 3.5 Periodograma (en escala log para serie multiplicativa)
+win.graph(width = 10, height = 6)
+periodogram(diff(log(Datos7)), 
+           main = "Periodograma - Serie Diferenciada Log",
+           lwd = 4)
+# Líneas verticales en frecuencias estacionales j/12
+abline(v = c(1:6)/12, col = 2, lty = 2, lwd = 2)
+text(x = c(1:6)/12, y = rep(max(periodogram(diff(log(Datos7)))$spec) * 0.8, 6),
+     labels = paste("F", 1:6, sep = ""), col = 2, cex = 0.8)
+
+# PASO 4: DEFINICIÓN DE VARIABLES PARA VALIDACIÓN CRUZADA ==================
+
+m = 12                           # Períodos para validación cruzada (últimos 12 meses)
+s = 12                           # Longitud del período estacional
+n = length(Datos7) - m           # Tamaño muestra de ajuste (137 observaciones)
+t = 1:n                          # Índice de tiempo para ajuste
+
+# Serie recortada para ajuste (enero 2013 - mayo 2024)
+yt = ts(Datos7[t], freq = 12, start = c(2013, 1))
+
+# Períodos para pronóstico (junio 2024 - mayo 2025)
+tnuevo = (n + 1):length(Datos7)
+ytnuevo = ts(Datos7[tnuevo], freq = 12, start = c(2024, 6))
+
+print(paste("Muestra de ajuste: ", length(yt), " observaciones"))
+print(paste("Muestra de validación: ", length(ytnuevo), " observaciones"))
+
+# PASO 5: PREPARACIÓN DE VARIABLES EXPLICATIVAS =============================
+
+# 5.1 Variables indicadoras estacionales (enero a noviembre, diciembre es referencia)
+mes = seasonaldummy(yt)          # Matriz 11 columnas (ene-nov)
+
+# 5.2 Variables polinomiales (grado 1 según tabla 2)
+poli = Mipoly(tiempo = t, grado = 1)  # Solo t y t^0 (intercepto incluido en lm)
+
+# 5.3 Matriz de diseño para ajuste
+X = data.frame(poli, mes)
+names(X) # Verificar nombres de variables
+
+# 5.4 Variables para pronóstico
+mesnuevo = seasonaldummy(yt, h = 12)  # Indicadoras para 12 pronósticos
+polinuevo = Mipoly(tiempo = tnuevo, grado = 1)
+Xnuevo = data.frame(polinuevo, mesnuevo)
+
+# PASO 6: MODELO 1 - LOG POLINOMIAL ESTACIONAL ==============================
+# Ecuación teórica: log(Y_t) = β₀ + β₁t + Σδᵢxᵢₜ + E_t
+# donde xᵢₜ son indicadoras estacionales y E_t ~ N(0,σ²)
+
+print("=== AJUSTANDO MODELO 1: LOG POLINOMIAL ESTACIONAL ===")
+
+modelo1 = lm(log(yt) ~ ., data = X)
+summary(modelo1)
+
+# Valores ajustados en escala original (con corrección de sesgo)
+factor_correccion1 = exp(summary(modelo1)$sigma^2/2)
+ythat1 = ts(exp(fitted(modelo1)) * factor_correccion1, 
+           freq = 12, start = start(yt))
+
+print(paste("Factor de corrección Modelo 1:", round(factor_correccion1, 6)))
+
+# Gráfico de ajuste Modelo 1
+win.graph(width = 12, height = 6)
+plot(Datos7, 
+     main = "Ajuste Modelo 1: Log Polinomial Estacional",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat1, col = 2, lwd = 2)
+legend("topleft", 
+       legend = c("Serie Original", "Modelo 1"), 
+       col = c(1, 2), 
+       lwd = 2)
+grid()
+
+# Criterios de información AIC y BIC
+npar1 = length(coef(modelo1)[coef(modelo1) != 0])
+seudores1 = yt - window(ythat1, start = start(yt), end = end(yt))  # Seudo-residuos
+Criterios1 = exp.crit.inf.resid(residuales = seudores1, n.par = npar1)
+print("Criterios AIC y BIC - Modelo 1:")
+print(Criterios1)
+
+# Pronósticos Modelo 1
+pronmodelo1_log = predict(modelo1, newdata = Xnuevo, interval = "prediction", level = 0.95)
+pronmodelo1 = exp(pronmodelo1_log) * factor_correccion1  # Escala original
+pronmodelo1 = ts(pronmodelo1, freq = 12, start = start(ytnuevo))
+
+ytpron1 = pronmodelo1[,1]  # Pronósticos puntuales
+
+# Precisión pronósticos puntuales Modelo 1
+precision1 = accuracy(ytpron1, ytnuevo)
+print("Precisión Modelo 1:")
+print(precision1)
+
+# Precisión intervalos de predicción Modelo 1
+amplcob1 = amplitud.cobertura(real = ytnuevo, LIP = pronmodelo1[,2], LSP = pronmodelo1[,3])
+score1 = IntervalScore(real = ytnuevo, LIP = pronmodelo1[,2], LSP = pronmodelo1[,3], alpha = 0.05)
+print(paste("Amplitud media IP Modelo 1:", round(amplcob1[1], 4)))
+print(paste("Cobertura IP Modelo 1:", round(amplcob1[2], 4), "%"))
+print(paste("Score promedio IP Modelo 1:", round(score1, 4)))
+
+# PASO 7: MODELO 2 - EXPONENCIAL POLINOMIAL ESTACIONAL ======================
+# Ecuación teórica: Y_t = exp(β₀ + β₁t + Σδᵢxᵢₜ) + E_t
+# donde E_t ~ N(0,σ²)
+
+print("=== AJUSTANDO MODELO 2: EXPONENCIAL POLINOMIAL ESTACIONAL ===")
+
+modelo2 = regexponencialv02(respuesta = yt, data = X)
+summary(modelo2)
+
+# Valores ajustados Modelo 2
+ythat2 = ts(fitted(modelo2), freq = 12, start = start(yt))
+
+# Gráfico de ajuste Modelo 2
+win.graph(width = 12, height = 6)
+plot(Datos7, 
+     main = "Ajuste Modelo 2: Exponencial Polinomial Estacional",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat2, col = 2, lwd = 2)
+legend("topleft", 
+       legend = c("Serie Original", "Modelo 2"), 
+       col = c(1, 2), 
+       lwd = 2)
+grid()
+
+# Criterios de información AIC y BIC
+npar2 = length(coef(modelo2)[coef(modelo2) != 0])
+Criterios2 = exp.crit.inf.resid(residuales = residuals(modelo2), n.par = npar2)
+print("Criterios AIC y BIC - Modelo 2:")
+print(Criterios2)
+
+# Pronósticos Modelo 2
+pronmodelo2_temp = predict_expo(modelo2, new.data = Xnuevo, level = 0.95, interval = "prediction")
+pronmodelo2 = ts(pronmodelo2_temp, freq = 12, start = start(ytnuevo))
+
+ytpron2 = pronmodelo2[,1]  # Pronósticos puntuales
+
+# Precisión pronósticos puntuales Modelo 2
+precision2 = accuracy(ytpron2, ytnuevo)
+print("Precisión Modelo 2:")
+print(precision2)
+
+# Precisión intervalos de predicción Modelo 2
+amplcob2 = amplitud.cobertura(real = ytnuevo, LIP = pronmodelo2[,2], LSP = pronmodelo2[,3])
+score2 = IntervalScore(real = ytnuevo, LIP = pronmodelo2[,2], LSP = pronmodelo2[,3], alpha = 0.05)
+print(paste("Amplitud media IP Modelo 2:", round(amplcob2[1], 4)))
+print(paste("Cobertura IP Modelo 2:", round(amplcob2[2], 4), "%"))
+print(paste("Score promedio IP Modelo 2:", round(score2, 4)))
+
+# PASO 8: MODELO 3 - SUAVIZAMIENTO EXPONENCIAL HOLT-WINTERS =================
+# Con restricciones beta=1e-5, gamma=1e-5 según tabla 2
+
+print("=== AJUSTANDO MODELO 3: HOLT-WINTERS MULTIPLICATIVO ===")
+
+modelo3 = SuavizamientoEstacional(yt, 
+                                 seasonal = "multiplicative", 
+                                 h = 12,
+                                 beta = 1e-5,    # Restricción para Datos7
+                                 gamma = 1e-5)   # Restricción para Datos7
+
+# Valores ajustados Modelo 3
+ythat3 = fitted(modelo3)
+
+# Gráfico de ajuste Modelo 3
+win.graph(width = 12, height = 6)
+plot(Datos7, 
+     main = "Ajuste Modelo 3: Holt-Winters Multiplicativo",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat3, col = 2, lwd = 2)
+legend("topleft", 
+       legend = c("Serie Original", "Modelo 3"), 
+       col = c(1, 2), 
+       lwd = 2)
+grid()
+
+# Criterios de información AIC y BIC
+npar3 = 2 + s - 1  # α, β (restringido), γ (restringido) + 11 índices estacionales
+Criterios3 = exp.crit.inf.resid(residuales = residuals(modelo3), n.par = npar3)
+print("Criterios AIC y BIC - Modelo 3:")
+print(Criterios3)
+
+# Pronósticos Modelo 3
+pronmodelo3 = modelo3$forecast
+ytpron3 = pronmodelo3[,1]  # Pronósticos puntuales
+
+# Precisión pronósticos puntuales Modelo 3
+precision3 = accuracy(ytpron3, ytnuevo)
+print("Precisión Modelo 3:")
+print(precision3)
+
+# Precisión intervalos de predicción Modelo 3
+amplcob3 = amplitud.cobertura(real = ytnuevo, LIP = pronmodelo3[,2], LSP = pronmodelo3[,3])
+score3 = IntervalScore(real = ytnuevo, LIP = pronmodelo3[,2], LSP = pronmodelo3[,3], alpha = 0.05)
+print(paste("Amplitud media IP Modelo 3:", round(amplcob3[1], 4)))
+print(paste("Cobertura IP Modelo 3:", round(amplcob3[2], 4), "%"))
+print(paste("Score promedio IP Modelo 3:", round(score3, 4)))
+
+# PASO 9: MODELO 4 - DESCOMPOSICIÓN + LOESS ==================================
+# DLL(GCV): Descomposición + LOESS Lineal con criterio GCV
+
+print("=== AJUSTANDO MODELO 4: DESCOMPOSICIÓN + LOESS ===")
+
+modelo4 = Descomp.Loessv02(serie.ajuste = yt, 
+                          tipo.descomp = "multiplicative",  # Serie multiplicativa
+                          grado = 1,                        # LOESS Lineal (DLL)
+                          criterio = "gcv",                 # Criterio GCV
+                          h = 12, 
+                          level = 0.95)
+
+# Valores ajustados Modelo 4
+ythat4 = fitted(modelo4)
+
+# Gráfico de ajuste Modelo 4
+win.graph(width = 12, height = 6)
+plot(Datos7, 
+     main = "Ajuste Modelo 4: Descomposición + LOESS",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat4, col = 2, lwd = 2)
+legend("topleft", 
+       legend = c("Serie Original", "Modelo 4"), 
+       col = c(1, 2), 
+       lwd = 2)
+grid()
+
+# Información del modelo 4
+print(paste("Parámetro de suavizamiento óptimo:", round(modelo4$span.optimo, 4)))
+print(paste("Número de parámetros equivalentes LOESS:", round(modelo4$p, 2)))
+
+# Criterios de información AIC y BIC
+npar4 = modelo4$p
+Criterios4 = exp.crit.inf.resid(residuals(modelo4), n.par = npar4)
+print("Criterios AIC y BIC - Modelo 4:")
+print(Criterios4)
+
+# Pronósticos Modelo 4
+pronmodelo4 = modelo4$forecast
+ytpron4 = pronmodelo4[,1]  # Pronósticos puntuales
+
+# Precisión pronósticos puntuales Modelo 4
+precision4 = accuracy(ytpron4, ytnuevo)
+print("Precisión Modelo 4:")
+print(precision4)
+
+# Precisión intervalos de predicción Modelo 4
+amplcob4 = amplitud.cobertura(real = ytnuevo, LIP = pronmodelo4[,2], LSP = pronmodelo4[,3])
+score4 = IntervalScore(real = ytnuevo, LIP = pronmodelo4[,2], LSP = pronmodelo4[,3], alpha = 0.05)
+print(paste("Amplitud media IP Modelo 4:", round(amplcob4[1], 4)))
+print(paste("Cobertura IP Modelo 4:", round(amplcob4[2], 4), "%"))
+print(paste("Score promedio IP Modelo 4:", round(score4, 4)))
+
+# PASO 10: ANÁLISIS DE RESIDUOS ==============================================
+
+print("=== ANÁLISIS DE RESIDUOS ===")
+
+# Gráficos de residuos Modelo 1 (en escala log)
+win.graph(width = 12, height = 8)
+par(mfrow = c(2, 2))
+
+plot.ts(residuals(modelo1), 
+        main = "Residuos vs Tiempo - Modelo 1",
+        ylab = "Residuos",
+        ylim = c(min(-2*summary(modelo1)$sigma, residuals(modelo1)),
+                max(2*summary(modelo1)$sigma, residuals(modelo1))))
+abline(h = c(-2*summary(modelo1)$sigma, 0, 2*summary(modelo1)$sigma), col = 2)
+
+plot(fitted(modelo1), residuals(modelo1),
+     main = "Residuos vs Valores Ajustados - Modelo 1",
+     xlab = "Valores Ajustados", ylab = "Residuos",
+     ylim = c(min(-2*summary(modelo1)$sigma, residuals(modelo1)),
+             max(2*summary(modelo1)$sigma, residuals(modelo1))))
+abline(h = c(-2*summary(modelo1)$sigma, 0, 2*summary(modelo1)$sigma), col = 2)
+
+qqnorm(residuals(modelo1), main = "Q-Q Plot - Modelo 1")
+qqline(residuals(modelo1), col = 2)
+
+acf(residuals(modelo1), main = "ACF Residuos - Modelo 1", lag.max = 24)
+
+# Gráficos de residuos Modelo 2
+win.graph(width = 12, height = 8)
+par(mfrow = c(2, 2))
+
+plot.ts(residuals(modelo2), 
+        main = "Residuos vs Tiempo - Modelo 2",
+        ylab = "Residuos",
+        ylim = c(min(-2*summary(modelo2)$sigma, residuals(modelo2)),
+                max(2*summary(modelo2)$sigma, residuals(modelo2))))
+abline(h = c(-2*summary(modelo2)$sigma, 0, 2*summary(modelo2)$sigma), col = 2)
+
+plot(fitted(modelo2), residuals(modelo2),
+     main = "Residuos vs Valores Ajustados - Modelo 2",
+     xlab = "Valores Ajustados", ylab = "Residuos",
+     ylim = c(min(-2*summary(modelo2)$sigma, residuals(modelo2)),
+             max(2*summary(modelo2)$sigma, residuals(modelo2))))
+abline(h = c(-2*summary(modelo2)$sigma, 0, 2*summary(modelo2)$sigma), col = 2)
+
+qqnorm(residuals(modelo2), main = "Q-Q Plot - Modelo 2")
+qqline(residuals(modelo2), col = 2)
+
+acf(residuals(modelo2), main = "ACF Residuos - Modelo 2", lag.max = 24)
+
+# Gráficos de residuos Modelo 3
+win.graph(width = 12, height = 8)
+par(mfrow = c(2, 2))
+
+plot(residuals(modelo3), 
+     main = "Residuos vs Tiempo - Modelo 3",
+     ylab = "Residuos",
+     ylim = c(min(-2*sqrt(modelo3$MSE), residuals(modelo3)),
+             max(2*sqrt(modelo3$MSE), residuals(modelo3))))
+abline(h = c(-2*sqrt(modelo3$MSE), 0, 2*sqrt(modelo3$MSE)), col = 2)
+
+plot(as.numeric(fitted(modelo3)), residuals(modelo3),
+     main = "Residuos vs Valores Ajustados - Modelo 3",
+     xlab = "Valores Ajustados", ylab = "Residuos",
+     ylim = c(min(-2*sqrt(modelo3$MSE), residuals(modelo3)),
+             max(2*sqrt(modelo3$MSE), residuals(modelo3))))
+abline(h = c(-2*sqrt(modelo3$MSE), 0, 2*sqrt(modelo3$MSE)), col = 2)
+
+qqnorm(residuals(modelo3), main = "Q-Q Plot - Modelo 3")
+qqline(residuals(modelo3), col = 2)
+
+acf(residuals(modelo3), main = "ACF Residuos - Modelo 3", lag.max = 24)
+
+# Gráficos de residuos Modelo 4
+win.graph(width = 12, height = 8)
+par(mfrow = c(2, 2))
+
+plot(residuals(modelo4), 
+     main = "Residuos vs Tiempo - Modelo 4",
+     ylab = "Residuos",
+     ylim = c(min(-2*sqrt(modelo4$MSE), residuals(modelo4)),
+             max(2*sqrt(modelo4$MSE), residuals(modelo4))))
+abline(h = c(-2*sqrt(modelo4$MSE), 0, 2*sqrt(modelo4$MSE)), col = 2)
+
+plot(as.numeric(fitted(modelo4)), residuals(modelo4),
+     main = "Residuos vs Valores Ajustados - Modelo 4",
+     xlab = "Valores Ajustados", ylab = "Residuos",
+     ylim = c(min(-2*sqrt(modelo4$MSE), residuals(modelo4)),
+             max(2*sqrt(modelo4$MSE), residuals(modelo4))))
+abline(h = c(-2*sqrt(modelo4$MSE), 0, 2*sqrt(modelo4$MSE)), col = 2)
+
+qqnorm(residuals(modelo4), main = "Q-Q Plot - Modelo 4")
+qqline(residuals(modelo4), col = 2)
+
+acf(residuals(modelo4), main = "ACF Residuos - Modelo 4", lag.max = 24)
+
+# PASO 11: INTERPRETACIÓN DE PARÁMETROS ESTACIONALES ========================
+# Solo para modelos 1 y 2 que usan indicadoras
+
+print("=== INTERPRETACIÓN PARÁMETROS ESTACIONALES ===")
+
+# Modelo 1: efectos estacionales en escala original
+efectos1 = interpdeltas(modelo = modelo1, 
+                       gradopoly = 1,           # Polinomio grado 1
+                       aditivo = FALSE,         # Modelo multiplicativo
+                       plotit = TRUE)
+
+# Modelo 2: efectos estacionales en escala original  
+efectos2 = interpdeltas(modelo = modelo2, 
+                       gradopoly = 1,           # Polinomio grado 1
+                       aditivo = FALSE,         # Modelo multiplicativo
+                       plotit = FALSE)          # No graficar para combinarlo
+
+# Gráfico comparativo de efectos estacionales
+win.graph(width = 12, height = 8)
+plot(efectos1$periodo, efectos1$expdeltasi100,
+     type = "b", pch = 19, lwd = 3, col = 1,
+     main = "Efectos Estacionales: Comparación Modelos 1 y 2",
+     xlab = "Mes", ylab = "exp(δᵢ) × 100%",
+     xaxt = "n", ylim = range(c(efectos1$expdeltasi100, efectos2$expdeltasi100)))
+lines(efectos2$periodo, efectos2$expdeltasi100, 
+      type = "b", pch = 17, lty = 2, lwd = 3, col = 2)
+axis(1, at = 1:12, labels = month.abb)
+abline(h = 100, lty = 3, col = "gray")
+legend("topleft", 
+       legend = c("Modelo 1 (Log-Pol)", "Modelo 2 (Exp-Pol)"), 
+       col = c(1, 2), pch = c(19, 17), lty = c(1, 2), lwd = 3)
+grid()
+
+print("Efectos estacionales Modelo 1:")
+print(round(efectos1$expdeltasi100, 2))
+print("Efectos estacionales Modelo 2:")
+print(round(efectos2$expdeltasi100, 2))
+
+# PASO 12: GRÁFICO COMPARATIVO DE PRONÓSTICOS ===============================
+
+win.graph(width = 14, height = 8)
+plot(ytnuevo, 
+     xaxt = "n",
+     ylim = c(min(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4), 
+             max(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4) + 3),
+     type = "b", pch = 19, lwd = 4,
+     main = "Comparación de Pronósticos - Validación Cruzada",
+     ylab = "Índice", xlab = "Período")
+
+lines(ytpron1, type = "b", pch = 2, lty = 2, lwd = 3, col = 2)
+lines(ytpron2, type = "b", pch = 3, lty = 3, lwd = 3, col = 4)  
+lines(ytpron3, type = "b", pch = 4, lty = 4, lwd = 3, col = 5)
+lines(ytpron4, type = "b", pch = 5, lty = 5, lwd = 3, col = 6)
+
+axis(1, at = time(ytnuevo),
+     labels = paste0(paste0(month.abb[c(6:12, 1:5)], "-"), c(rep(24, 7), rep(25, 5))),
+     cex.axis = 0.8)
+
+legend("topleft", 
+       legend = c("Real", "Modelo 1 (Log-Pol)", "Modelo 2 (Exp-Pol)", 
+                 "Modelo 3 (HW)", "Modelo 4 (Desc+LOESS)"),
+       pch = c(19, 2:5), col = c(1, 2, 4:6), lwd = c(4, 3, 3, 3, 3), 
+       lty = c(1, 2:5))
+grid()
+
+# PASO 13: TABLAS RESUMEN DE RESULTADOS ======================================
+
+print("=== TABLAS RESUMEN ===")
+
+# Tabla de criterios de información
+tabla_criterios = rbind(Criterios1, Criterios2, Criterios3, Criterios4)
+rownames(tabla_criterios) = c("Modelo 1 (Log-Pol)", "Modelo 2 (Exp-Pol)", 
+                             "Modelo 3 (HW)", "Modelo 4 (Desc+LOESS)")
+
+print("CRITERIOS DE INFORMACIÓN:")
+print(round(tabla_criterios, 4))
+
+# Tabla de precisión pronósticos puntuales
+precision_puntuales = rbind(precision1, precision2, precision3, precision4)[, c(2, 3, 5)]
+rownames(precision_puntuales) = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4")
+colnames(precision_puntuales) = c("RMSE", "MAE", "MAPE")
+
+print("PRECISIÓN PRONÓSTICOS PUNTUALES:")
+print(round(precision_puntuales, 4))
+
+# Tabla de precisión intervalos de predicción
+amplitudes = c(amplcob1[1], amplcob2[1], amplcob3[1], amplcob4[1])
+coberturas = c(amplcob1[2], amplcob2[2], amplcob3[2], amplcob4[2])
+scores = c(score1, score2, score3, score4)
+
+precision_intervalos = data.frame(
+  Amplitud_Media = amplitudes,
+  Cobertura_Pct = coberturas,
+  Score_Promedio = scores
+)
+rownames(precision_intervalos) = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4")
+
+print("PRECISIÓN INTERVALOS DE PREDICCIÓN:")
+print(round(precision_intervalos, 4))
+
+# Tabla resumen completa
+tabla_completa = cbind(tabla_criterios, precision_puntuales, precision_intervalos)
+print("TABLA RESUMEN COMPLETA:")
+print(round(tabla_completa, 4))
+
+# PASO 14: EXPORTAR RESULTADOS A CSV ==========================================
+
+print("=== EXPORTANDO RESULTADOS ===")
+
+# Exportar tabla de parámetros Modelo 1
+write.csv2(summary(modelo1)$coefficients, "parametros_modelo1_grupo3.csv", row.names = TRUE)
+
+# Exportar tabla de parámetros Modelo 2  
+write.csv2(summary(modelo2)$coefficients, "parametros_modelo2_grupo3.csv", row.names = TRUE)
+
+# Exportar pronósticos de todos los modelos
+pronosticos_todos = cbind(
+  Real = as.numeric(ytnuevo),
+  Modelo1 = as.numeric(ytpron1),
+  Modelo2 = as.numeric(ytpron2), 
+  Modelo3 = as.numeric(ytpron3),
+  Modelo4 = as.numeric(ytpron4)
+)
+rownames(pronosticos_todos) = paste(trunc(time(ytnuevo)), cycle(ytnuevo), sep = "-")
+
+write.csv2(pronosticos_todos, "pronosticos_todos_modelos_grupo3.csv", row.names = TRUE)
+
+# Exportar tabla resumen
+write.csv2(tabla_completa, "resumen_completo_grupo3.csv", row.names = TRUE)
+
+# Exportar efectos estacionales
+efectos_estacionales = cbind(
+  Mes = month.abb,
+  Modelo1 = efectos1$expdeltasi100,
+  Modelo2 = efectos2$expdeltasi100
+)
+write.csv2(efectos_estacionales, "efectos_estacionales_grupo3.csv", row.names = FALSE)
+
+# PASO 15: DIAGNÓSTICOS ADICIONALES ===========================================
+
+print("=== DIAGNÓSTICOS ADICIONALES ===")
+
+# Test de normalidad de residuos (Shapiro-Wilk)
+print("TESTS DE NORMALIDAD (Shapiro-Wilk):")
+print(paste("Modelo 1 - p-valor:", round(shapiro.test(residuals(modelo1))$p.value, 6)))
+print(paste("Modelo 2 - p-valor:", round(shapiro.test(residuals(modelo2))$p.value, 6)))
+print(paste("Modelo 3 - p-valor:", round(shapiro.test(residuals(modelo3))$p.value, 6)))
+print(paste("Modelo 4 - p-valor:", round(shapiro.test(residuals(modelo4))$p.value, 6)))
+
+# Test de heterocedasticidad (Breusch-Pagan) para modelos lineales
+if(require(lmtest, quietly = TRUE)) {
+  print("TEST DE HETEROCEDASTICIDAD (Breusch-Pagan):")
+  print(paste("Modelo 1 - p-valor:", round(bptest(modelo1)$p.value, 6)))
+}
+
+# Test de autocorrelación (Ljung-Box)
+print("TESTS DE AUTOCORRELACIÓN (Ljung-Box):")
+print(paste("Modelo 1 - p-valor:", round(Box.test(residuals(modelo1), lag = 12, type = "Ljung-Box")$p.value, 6)))
+print(paste("Modelo 2 - p-valor:", round(Box.test(residuals(modelo2), lag = 12, type = "Ljung-Box")$p.value, 6)))
+print(paste("Modelo 3 - p-valor:", round(Box.test(residuals(modelo3), lag = 12, type = "Ljung-Box")$p.value, 6)))
+print(paste("Modelo 4 - p-valor:", round(Box.test(residuals(modelo4), lag = 12, type = "Ljung-Box")$p.value, 6)))
+
+# PASO 16: CONCLUSIONES Y RECOMENDACIONES ====================================
+
+print("=== ANÁLISIS FINAL ===")
+
+# Identificar el mejor modelo según diferentes criterios
+mejor_AIC = which.min(tabla_criterios[, "AIC"])
+mejor_BIC = which.min(tabla_criterios[, "BIC"])
+mejor_RMSE = which.min(precision_puntuales[, "RMSE"])
+mejor_MAE = which.min(precision_puntuales[, "MAE"])
+mejor_MAPE = which.min(precision_puntuales[, "MAPE"])
+mejor_cobertura = which.max(precision_intervalos[, "Cobertura_Pct"])
+mejor_score = which.min(precision_intervalos[, "Score_Promedio"])
+
+print("MEJORES MODELOS POR CRITERIO:")
+print(paste("Mejor AIC:", rownames(tabla_criterios)[mejor_AIC]))
+print(paste("Mejor BIC:", rownames(tabla_criterios)[mejor_BIC]))
+print(paste("Mejor RMSE:", rownames(precision_puntuales)[mejor_RMSE]))
+print(paste("Mejor MAE:", rownames(precision_puntuales)[mejor_MAE]))
+print(paste("Mejor MAPE:", rownames(precision_puntuales)[mejor_MAPE]))
+print(paste("Mejor Cobertura:", rownames(precision_intervalos)[mejor_cobertura]))
+print(paste("Mejor Score IP:", rownames(precision_intervalos)[mejor_score]))
+
+# Ranking general (promedio de posiciones)
+ranking_AIC_BIC = rank(tabla_criterios[, "AIC"]) + rank(tabla_criterios[, "BIC"])
+ranking_precision = rank(precision_puntuales[, "RMSE"]) + rank(precision_puntuales[, "MAE"]) + rank(precision_puntuales[, "MAPE"])
+ranking_intervalos = rank(-precision_intervalos[, "Cobertura_Pct"]) + rank(precision_intervalos[, "Score_Promedio"])
+
+ranking_general = ranking_AIC_BIC + ranking_precision + ranking_intervalos
+names(ranking_general) = rownames(tabla_criterios)
+
+print("RANKING GENERAL DE MODELOS (menor es mejor):")
+print(sort(ranking_general))
+
+print("=== PROGRAMA COMPLETADO ===")
+print("Todos los resultados han sido guardados en archivos CSV.")
+print("Revise los gráficos generados para el análisis visual.")
+print("El mejor modelo general es:", names(sort(ranking_general))[1])
+
+# INFORMACIÓN ADICIONAL PARA EL INFORME ======================================
+
+cat("\n=== INFORMACIÓN PARA EL INFORME ===\n")
+
+cat("\n1. ECUACIONES DE LOS MODELOS:\n")
+cat("Modelo 1 (Log Polinomial): log(Y_t) = β₀ + β₁t + Σδᵢxᵢₜ + E_t\n")
+cat("Modelo 2 (Exp Polinomial): Y_t = exp(β₀ + β₁t + Σδᵢxᵢₜ) + E_t\n") 
+cat("Modelo 3 (Holt-Winters): Y_t = (L_{t-1} + T_{t-1}) × S_{t-s} + E_t\n")
+cat("Modelo 4 (Desc+LOESS): Y_t = T_t × S_t × E_t (descomposición multiplicativa)\n")
+
+cat("\n2. SUPUESTOS ESTADÍSTICOS:\n")
+cat("- Modelos 1 y 2: E_t ~ iid N(0, σ²)\n")
+cat("- Modelo 3: E_t ~ iid N(0, σ²) con restricciones β=γ=1e-5\n")
+cat("- Modelo 4: Ajuste local no paramétrico\n")
+
+cat("\n3. INTERPRETACIÓN RESULTADOS:\n")
+cat("- Factor corrección Modelo 1:", round(factor_correccion1, 6), "\n")
+cat("- Parámetro suavizamiento LOESS Modelo 4:", round(modelo4$span.optimo, 4), "\n")
+cat("- Grados libertad equivalentes Modelo 4:", round(modelo4$p, 2), "\n")
+
+cat("\n4. DATOS DE LA SERIE:\n")
+cat("- Variable: Prendas de vestir y textiles\n")
+cat("- Período: Enero 2013 - Mayo 2025\n")
+cat("- Frecuencia: Mensual\n")
+cat("- Total observaciones:", length(Datos7), "\n")
+cat("- Muestra ajuste:", length(yt), "obs\n")
+cat("- Muestra validación:", length(ytnuevo), "obs\n")
+cat("- Tipo descomposición: Multiplicativa\n")
+
+print("\n=== FIN DEL ANÁLISIS ===")
