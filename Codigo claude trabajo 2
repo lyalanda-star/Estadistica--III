@@ -1,0 +1,1054 @@
+# ==============================================================================
+# TRABAJO No. 2 ESTADÍSTICA III - MODELOS DE REGRESIÓN CON ERRORES ARMA
+# GRUPO 3 - DATOS7: Prendas de vestir y textiles
+# Serie: Exponencial polinomial grado 1, estacional con indicadoras
+# Modelo 4: ARMA(17,13) con parámetros específicos según armasubsets
+# ==============================================================================
+
+
+# Instala los paquetes necesarios
+install.packages("TSA")
+install.packages("forecast")
+install.packages("fANCOVA")
+
+
+# PASO 1: LIMPIAR Y CARGAR LIBRERÍAS ==========================================
+rm(list=ls(all=TRUE))
+
+# Librerías necesarias
+library(forecast)   # Para Arima() y forecast()
+library(lmtest)     # Para coeftest()
+library(TSA)        # Para eacf(), periodogram(), armasubsets()
+library(fANCOVA)    # Para funciones LOESS
+
+# Cargar funciones del profesor desde GitHub
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-Criterios.Informacion-Calidad.Intervalos.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-Mipoly.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-regexponencialv02.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-predict_expo.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-BP.LB.test-pruebaDW1.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-SelectModel.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-SuavizamientoEstacional.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funcion-regexpo.ErrorARMAv03.R")
+
+# PASO 2: LECTURA DE DATOS ====================================================
+# Datos7: columna 9 (Prendas de vestir y textiles)
+# Archivo: anex-EMC-SeriesIndiceEmpalmadosLineadeMercancia-may2025.csv
+
+Datos7 = read.table(file.choose(),
+                   header = TRUE,
+                   sep = ";",
+                   dec = ",",
+                   skip = 10,
+                   colClasses = c(rep("NULL", 8), "numeric", rep("NULL", 13)))
+
+# Convertir a serie temporal
+Datos7 = ts(Datos7, freq = 12, start = c(2013, 1))
+
+# Verificar los datos
+print("Primeros valores de la serie:")
+head(Datos7)
+print(paste("Total de observaciones:", length(Datos7)))
+
+# PASO 3: ANÁLISIS DESCRIPTIVO DE LA SERIE ===================================
+
+# 3.1 Gráfico de la serie original
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Serie Prendas de Vestir y Textiles",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+grid()
+
+# 3.2 ACF de la serie original (para evaluar estacionariedad)
+win.graph(width = 12, height = 6)
+acf(as.numeric(Datos7), 
+    lag.max = 36,
+    ci.type = "ma",
+    main = "ACF de la Serie Original",
+    col = 4,
+    ci.col = 2,
+    lwd = 3)
+
+# PASO 4: DEFINICIÓN DE VARIABLES PARA VALIDACIÓN CRUZADA ===================
+
+m = 12                        # Períodos para validación cruzada (últimos 12)
+s = 12                        # Longitud del período estacional
+n = length(Datos7) - m        # Tamaño muestra ajuste: 137 observaciones
+t = 1:n                       # Índice de tiempo para ajuste
+
+# Serie recortada para ajuste (enero 2013 - mayo 2024)
+yt = ts(Datos7[t], freq = 12, start = c(2013, 1))
+
+# Períodos para pronóstico (junio 2024 - mayo 2025)
+tnuevo = (n + 1):length(Datos7)
+ytnuevo = ts(Datos7[tnuevo], freq = 12, start = c(2024, 6))
+
+print(paste("Muestra de ajuste:", length(yt), "observaciones"))
+print(paste("Muestra de validación:", length(ytnuevo), "observaciones"))
+
+# PASO 5: PREPARACIÓN DE VARIABLES PARA EL MODELO GLOBAL ====================
+
+# Variables polinomiales (grado 1 según Tabla 1)
+poli = Mipoly(tiempo = t, grado = 1)
+
+# Variables indicadoras estacionales (enero a noviembre, diciembre referencia)
+Mes = seasonaldummy(yt)
+
+# Matriz de diseño para ajuste
+X = data.frame(poli, Mes)
+print("Variables en la matriz X:")
+names(X)
+
+# Variables para pronóstico
+polinuevo = Mipoly(tiempo = tnuevo, grado = 1)
+Mesnuevo = seasonaldummy(yt, h = 12)
+Xnuevo = data.frame(polinuevo, Mesnuevo)
+
+# PASO 6: MODELO GLOBAL (EXPONENCIAL CON ERROR RB) ==========================
+# Ecuación: Y_t = exp(β₀ + β₁t + Σδᵢxᵢₜ) + E_t
+# donde E_t ~ iid N(0,σ²)
+
+print("=== AJUSTANDO MODELO GLOBAL: EXPONENCIAL POLINOMIAL ESTACIONAL ===")
+
+# Ajuste del modelo global
+modglobal = regexponencialv02(respuesta = yt, data = X)
+summary(modglobal)
+
+# Valores ajustados
+ythatglobal = ts(fitted(modglobal), freq = 12, start = start(yt))
+
+# Gráfico del ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Ajuste Modelo Global - Exponencial Polinomial Estacional",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythatglobal, col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo Global"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información AIC y BIC
+nparmodglobal = length(coef(modglobal)[coef(modglobal) != 0])
+print(paste("Número de parámetros modelo global:", nparmodglobal))
+
+Criteriosglobal = exp.crit.inf.resid(residuales = residuals(modglobal), 
+                                     n.par = nparmodglobal)
+print("Criterios AIC y BIC - Modelo Global:")
+print(Criteriosglobal)
+
+# Pronósticos del modelo global
+pronosglobal_temp = predict_expo(modglobal, 
+                                 new.data = Xnuevo, 
+                                 level = 0.95, 
+                                 interval = "prediction")
+pronosglobal = ts(pronosglobal_temp, freq = 12, start = start(ytnuevo))
+ytpronglobal = pronosglobal[,1]
+
+# Precisión pronósticos
+print("Precisión pronósticos modelo global:")
+print(accuracy(ytpronglobal, ytnuevo))
+
+amplcobmodglobal = amplitud.cobertura(real = ytnuevo, 
+                                      LIP = pronosglobal[,2], 
+                                      LSP = pronosglobal[,3])
+print("Amplitud y cobertura IP modelo global:")
+print(amplcobmodglobal)
+
+# PASO 7: VALIDACIÓN DE SUPUESTOS MODELO GLOBAL =============================
+
+print("=== VALIDACIÓN DE SUPUESTOS MODELO GLOBAL ===")
+
+# 7.1 Residuos vs. tiempo
+win.graph(width = 12, height = 6)
+plot.ts(residuals(modglobal),
+        ylab = "Residuos",
+        main = "Residuos vs Tiempo - Modelo Global",
+        ylim = c(min(-2*sqrt(modglobal$sigma2), residuals(modglobal)),
+                max(2*sqrt(modglobal$sigma2), residuals(modglobal))))
+abline(h = c(-2*sqrt(modglobal$sigma2), 0, 2*sqrt(modglobal$sigma2)), 
+       lty = 2, col = 2, lwd = 2)
+grid()
+
+# 7.2 Residuos vs. valores ajustados
+win.graph(width = 12, height = 6)
+plot(fitted(modglobal), residuals(modglobal),
+     ylab = "Residuos",
+     xlab = "Valores Ajustados",
+     main = "Residuos vs Valores Ajustados - Modelo Global",
+     ylim = c(min(-2*sqrt(modglobal$sigma2), residuals(modglobal)),
+             max(2*sqrt(modglobal$sigma2), residuals(modglobal))))
+abline(h = c(-2*sqrt(modglobal$sigma2), 0, 2*sqrt(modglobal$sigma2)), 
+       lty = 2, col = 2, lwd = 2)
+grid()
+
+# 7.3 ACF de residuos (m = 36)
+win.graph(width = 12, height = 6)
+acf(residuals(modglobal),
+    ci.type = "ma",
+    lag.max = 36,
+    main = "ACF Residuos - Modelo Global",
+    ci.col = 2,
+    lwd = 3)
+
+# 7.4 PACF de residuos (m = 36)
+win.graph(width = 12, height = 6)
+pacf(residuals(modglobal),
+     lag.max = 36,
+     main = "PACF Residuos - Modelo Global",
+     ci.col = 2,
+     lwd = 3)
+
+# 7.5 Test Ljung-Box (m = 6, 12, 18, 24, 30, 36)
+print("Test Ljung-Box - Modelo Global:")
+BP.LB.test(residuals(modglobal), maxlag = 36, type = "Ljung")
+
+# PASO 8: IDENTIFICACIÓN DE MODELOS ARMA ====================================
+
+print("=== IDENTIFICACIÓN DE MODELOS ARMA PARA EL ERROR ESTRUCTURAL ===")
+
+# 8.1 EACF (30x30 según Tabla 1)
+print("EACF:")
+eacf(residuals(modglobal), ar.max = 30, ma.max = 30)
+
+# 8.2 SelectModel (modelos AR)
+print("SelectModel con AIC:")
+SelectModel(residuals(modglobal), lag.max = 36, Criterion = "AIC", ARModel = "AR")
+
+print("SelectModel con BIC:")
+SelectModel(residuals(modglobal), lag.max = 36, Criterion = "BIC", ARModel = "AR")
+
+# 8.3 auto.arima sobre vector de residuales sin fechas
+print("auto.arima (AIC) - vector sin fechas:")
+auto.arima(residuals(modglobal), ic = "aic")
+
+print("auto.arima (BIC) - vector sin fechas:")
+auto.arima(residuals(modglobal), ic = "bic")
+
+# 8.4 auto.arima sobre serie de tiempo con fechas
+serieEt = ts(residuals(modglobal), freq = 12, start = c(2013, 1))
+
+print("auto.arima (AIC) - serie de tiempo:")
+auto.arima(serieEt, ic = "aic")
+
+print("auto.arima (BIC) - serie de tiempo:")
+auto.arima(serieEt, ic = "bic")
+
+# 8.5 armasubsets (18x18, método 'ml', renglón 3)
+win.graph(width = 10, height = 5)
+plot(armasubsets(residuals(modglobal), 
+                nar = 18, 
+                nma = 18, 
+                y.name = "AR", 
+                ar.method = "ml"))
+title("armasubsets 18x18 - Método ML")
+
+# PASO 9: MODELO 1 - AR(17) ==================================================
+# Según Tabla 1: AR(17) con method="CSS-ML"
+
+print("=== AJUSTANDO MODELO 1: AR(17) ===")
+
+modelo1 = regexpo.ErrorARMAv03(respuesta = yt,
+                               data = X,
+                               newdata = Xnuevo,
+                               order = c(17, 0, 0),
+                               method = "CSS-ML")
+
+# Parámetros estimados
+print("Parámetros estimados Modelo 1:")
+print(coef(modelo1))
+
+# Valores ajustados
+ythat1 = fitted(modelo1)
+
+# Gráfico ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Ajuste Modelo 1: AR(17)",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat1, col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo 1"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información
+k1 = modelo1$p
+print(paste("Número de parámetros Modelo 1:", k1))
+
+Criteriosmodelo1 = exp.crit.inf.resid(residuales = residuals(modelo1), n.par = k1)
+print("Criterios AIC y BIC - Modelo 1:")
+print(Criteriosmodelo1)
+
+# Validación de supuestos
+print("Test Ljung-Box - Modelo 1:")
+BP.LB.test(residuals(modelo1), maxlag = 36, type = "Ljung")
+
+# Test de normalidad (solo si no hay correlaciones)
+if(sum(abs(acf(residuals(modelo1), plot = FALSE)$acf[-1]) > 1.96/sqrt(n)) == 0) {
+  print("Test Shapiro-Wilk - Modelo 1:")
+  print(shapiro.test(residuals(modelo1)))
+}
+
+# Pronósticos
+predmodelo1 = modelo1$forecast
+ytpron1 = predmodelo1[,1]
+
+print("Precisión pronósticos Modelo 1:")
+print(accuracy(ytpron1, ytnuevo))
+
+amplcobmodelo1 = amplitud.cobertura(real = ytnuevo, 
+                                    LIP = predmodelo1[,2], 
+                                    LSP = predmodelo1[,3])
+ScoreIP1 = IntervalScore(real = ytnuevo, 
+                        LIP = predmodelo1[,2], 
+                        LSP = predmodelo1[,3], 
+                        alpha = 0.05)
+
+print(paste("Amplitud media IP:", round(amplcobmodelo1[1], 4)))
+print(paste("Cobertura IP:", round(amplcobmodelo1[2], 4), "%"))
+print(paste("Score promedio IP:", round(ScoreIP1, 4)))
+
+# PASO 10: MODELO 2 - ARMA(14,13) ===========================================
+# Según Tabla 1: ARMA(14,13) con method="CSS-ML"
+
+print("=== AJUSTANDO MODELO 2: ARMA(14,13) ===")
+
+modelo2 = regexpo.ErrorARMAv03(respuesta = yt,
+                               data = X,
+                               newdata = Xnuevo,
+                               order = c(14, 0, 13),
+                               method = "CSS-ML")
+
+# Parámetros estimados
+print("Parámetros estimados Modelo 2:")
+print(coef(modelo2))
+
+# Valores ajustados
+ythat2 = fitted(modelo2)
+
+# Gráfico ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Ajuste Modelo 2: ARMA(14,13)",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat2, col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo 2"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información
+k2 = modelo2$p
+print(paste("Número de parámetros Modelo 2:", k2))
+
+Criteriosmodelo2 = exp.crit.inf.resid(residuales = residuals(modelo2), n.par = k2)
+print("Criterios AIC y BIC - Modelo 2:")
+print(Criteriosmodelo2)
+
+# Validación de supuestos
+print("Test Ljung-Box - Modelo 2:")
+BP.LB.test(residuals(modelo2), maxlag = 36, type = "Ljung")
+
+# Test de normalidad
+if(sum(abs(acf(residuals(modelo2), plot = FALSE)$acf[-1]) > 1.96/sqrt(n)) == 0) {
+  print("Test Shapiro-Wilk - Modelo 2:")
+  print(shapiro.test(residuals(modelo2)))
+}
+
+# Pronósticos
+predmodelo2 = modelo2$forecast
+ytpron2 = predmodelo2[,1]
+
+print("Precisión pronósticos Modelo 2:")
+print(accuracy(ytpron2, ytnuevo))
+
+amplcobmodelo2 = amplitud.cobertura(real = ytnuevo, 
+                                    LIP = predmodelo2[,2], 
+                                    LSP = predmodelo2[,3])
+ScoreIP2 = IntervalScore(real = ytnuevo, 
+                        LIP = predmodelo2[,2], 
+                        LSP = predmodelo2[,3], 
+                        alpha = 0.05)
+
+print(paste("Amplitud media IP:", round(amplcobmodelo2[1], 4)))
+print(paste("Cobertura IP:", round(amplcobmodelo2[2], 4), "%"))
+print(paste("Score promedio IP:", round(ScoreIP2, 4)))
+
+# PASO 11: MODELO 3 - ARMA(10,1)(2,0)[12] ===================================
+# Según Tabla 1: ARMA(10,1)(2,0)[12] con method="CSS-ML"
+
+print("=== AJUSTANDO MODELO 3: ARMA(10,1)(2,0)[12] ===")
+
+modelo3 = regexpo.ErrorARMAv03(respuesta = yt,
+                               data = X,
+                               newdata = Xnuevo,
+                               order = c(10, 0, 1),
+                               seasonal = list(order = c(2, 0, 0)),
+                               method = "CSS-ML")
+
+# Parámetros estimados
+print("Parámetros estimados Modelo 3:")
+print(coef(modelo3))
+
+# Valores ajustados
+ythat3 = fitted(modelo3)
+
+# Gráfico ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Ajuste Modelo 3: ARMA(10,1)(2,0)[12]",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat3, col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo 3"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información
+k3 = modelo3$p
+print(paste("Número de parámetros Modelo 3:", k3))
+
+Criteriosmodelo3 = exp.crit.inf.resid(residuales = residuals(modelo3), n.par = k3)
+print("Criterios AIC y BIC - Modelo 3:")
+print(Criteriosmodelo3)
+
+# Validación de supuestos
+print("Test Ljung-Box - Modelo 3:")
+BP.LB.test(residuals(modelo3), maxlag = 36, type = "Ljung")
+
+# Test de normalidad
+if(sum(abs(acf(residuals(modelo3), plot = FALSE)$acf[-1]) > 1.96/sqrt(n)) == 0) {
+  print("Test Shapiro-Wilk - Modelo 3:")
+  print(shapiro.test(residuals(modelo3)))
+}
+
+# Pronósticos
+predmodelo3 = modelo3$forecast
+ytpron3 = predmodelo3[,1]
+
+print("Precisión pronósticos Modelo 3:")
+print(accuracy(ytpron3, ytnuevo))
+
+amplcobmodelo3 = amplitud.cobertura(real = ytnuevo, 
+                                    LIP = predmodelo3[,2], 
+                                    LSP = predmodelo3[,3])
+ScoreIP3 = IntervalScore(real = ytnuevo, 
+                        LIP = predmodelo3[,2], 
+                        LSP = predmodelo3[,3], 
+                        alpha = 0.05)
+
+print(paste("Amplitud media IP:", round(amplcobmodelo3[1], 4)))
+print(paste("Cobertura IP:", round(amplcobmodelo3[2], 4), "%"))
+print(paste("Score promedio IP:", round(ScoreIP3, 4)))
+
+# PASO 12: MODELO 4 - ARMA(17,13) CON PARÁMETROS ESPECÍFICOS ================
+# Según Tabla 1: armasubsets 18x18, renglón 3, incluir φ₄, φ₁₀
+# y usar method="CSS-ML"
+
+print("=== AJUSTANDO MODELO 4: ARMA(17,13) REDUCIDO ===")
+
+# Definir vector fixed para incluir solo φ₄ y φ₁₀ además de los del renglón 3
+# NOTA: Debes verificar cuáles parámetros están en el renglón 3 del armasubsets
+# y agregar φ₄ (posición 4) y φ₁₀ (posición 10)
+
+# Ejemplo de fixed (ajustar según armasubsets real):
+# Si renglón 3 tiene φ₁, φ₃, φ₁₇ y θ₁, θ₁₃
+# Entonces agregar φ₄ y φ₁₀
+
+fixed_vector = c(
+  NA,      # φ₁
+  0,       # φ₂
+  NA,      # φ₃
+  NA,      # φ₄ (agregar según instrucciones)
+  rep(0, 5),  # φ₅ a φ₉
+  NA,      # φ₁₀ (agregar según instrucciones)
+  rep(0, 6),  # φ₁₁ a φ₁₆
+  NA,      # φ₁₇
+  NA,      # θ₁
+  rep(0, 11), # θ₂ a θ₁₂
+  NA       # θ₁₃
+)
+
+modelo4 = regexpo.ErrorARMAv03(respuesta = yt,
+                               data = X,
+                               newdata = Xnuevo,
+                               order = c(17, 0, 13),
+                               fixed = fixed_vector,
+                               method = "CSS-ML")
+
+# Parámetros estimados
+print("Parámetros estimados Modelo 4:")
+print(coef(modelo4))
+
+# Valores ajustados
+ythat4 = fitted(modelo4)
+
+# Gráfico ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Ajuste Modelo 4: ARMA(17,13) Reducido",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(ythat4, col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo 4"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información
+k4 = modelo4$p
+print(paste("Número de parámetros Modelo 4:", k4))
+
+Criteriosmodelo4 = exp.crit.inf.resid(residuales = residuals(modelo4), n.par = k4)
+print("Criterios AIC y BIC - Modelo 4:")
+print(Criteriosmodelo4)
+
+# Validación de supuestos
+print("Test Ljung-Box - Modelo 4:")
+BP.LB.test(residuals(modelo4), maxlag = 36, type = "Ljung")
+
+# Test de normalidad
+if(sum(abs(acf(residuals(modelo4), plot = FALSE)$acf[-1]) > 1.96/sqrt(n)) == 0) {
+  print("Test Shapiro-Wilk - Modelo 4:")
+  print(shapiro.test(residuals(modelo4)))
+}
+
+# Pronósticos
+predmodelo4 = modelo4$forecast
+ytpron4 = predmodelo4[,1]
+
+print("Precisión pronósticos Modelo 4:")
+print(accuracy(ytpron4, ytnuevo))
+
+amplcobmodelo4 = amplitud.cobertura(real = ytnuevo, 
+                                    LIP = predmodelo4[,2], 
+                                    LSP = predmodelo4[,3])
+ScoreIP4 = IntervalScore(real = ytnuevo, 
+                        LIP = predmodelo4[,2], 
+                        LSP = predmodelo4[,3], 
+                        alpha = 0.05)
+
+print(paste("Amplitud media IP:", round(amplcobmodelo4[1], 4)))
+print(paste("Cobertura IP:", round(amplcobmodelo4[2], 4), "%"))
+print(paste("Score promedio IP:", round(ScoreIP4, 4)))
+
+# PASO 13: GRÁFICOS DE RESIDUOS COMPARATIVOS ================================
+
+print("=== GRÁFICOS DE RESIDUOS ===")
+
+# ACF de residuos
+win.graph(width = 14, height = 10)
+par(mfrow = c(2, 2))
+
+acf(as.numeric(residuals(modelo1)), ci.type = "ma", lag.max = 36, 
+    main = "ACF Modelo 1", ci.col = 2)
+acf(as.numeric(residuals(modelo2)), ci.type = "ma", lag.max = 36, 
+    main = "ACF Modelo 2", ci.col = 2)
+acf(as.numeric(residuals(modelo3)), ci.type = "ma", lag.max = 36, 
+    main = "ACF Modelo 3", ci.col = 2)
+acf(as.numeric(residuals(modelo4)), ci.type = "ma", lag.max = 36, 
+    main = "ACF Modelo 4", ci.col = 2)
+
+# PACF de residuos
+win.graph(width = 14, height = 10)
+par(mfrow = c(2, 2))
+
+pacf(as.numeric(residuals(modelo1)), lag.max = 36, 
+     main = "PACF Modelo 1", ci.col = 2)
+pacf(as.numeric(residuals(modelo2)), lag.max = 36, 
+     main = "PACF Modelo 2", ci.col = 2)
+pacf(as.numeric(residuals(modelo3)), lag.max = 36, 
+     main = "PACF Modelo 3", ci.col = 2)
+pacf(as.numeric(residuals(modelo4)), lag.max = 36, 
+     main = "PACF Modelo 4", ci.col = 2)
+
+# Q-Q plots
+win.graph(width = 14, height = 10)
+par(mfrow = c(2, 2))
+
+qqnorm(residuals(modelo1), main = "Q-Q Plot Modelo 1")
+qqline(residuals(modelo1), col = 2)
+
+qqnorm(residuals(modelo2), main = "Q-Q Plot Modelo 2")
+qqline(residuals(modelo2), col = 2)
+
+qqnorm(residuals(modelo3), main = "Q-Q Plot Modelo 3")
+qqline(residuals(modelo3), col = 2)
+
+qqnorm(residuals(modelo4), main = "Q-Q Plot Modelo 4")
+qqline(residuals(modelo4), col = 2)
+
+# PASO 14: MEJOR MODELO LOCAL DEL TRABAJO 1 =================================
+# Según Tabla 2: Modelo 3 (Holt-Winters) con beta=1e-5, gamma=1e-5
+
+print("=== MODELO LOCAL: HOLT-WINTERS MULTIPLICATIVO ===")
+
+modelocal = SuavizamientoEstacional(yt, 
+                                   seasonal = "multiplicative", 
+                                   h = 12,
+                                   beta = 1e-5,
+                                   gamma = 1e-5)
+
+# Gráfico ajuste
+win.graph(width = 12, height = 6)
+plot(Datos7,
+     main = "Mejor Modelo Local: Holt-Winters Multiplicativo",
+     ylab = "Índice",
+     xlab = "Tiempo",
+     lwd = 2)
+lines(fitted(modelocal), col = 2, lwd = 2)
+legend("topleft",
+       legend = c("Serie Original", "Modelo Local HW"),
+       col = c(1, 2),
+       lwd = 2)
+grid()
+
+# Criterios de información
+parmodelocal = (s - 1) + 2  # α, β, γ + 11 índices estacionales
+Criterioslocal = exp.crit.inf.resid(residuales = residuals(modelocal), 
+                                   n.par = parmodelocal)
+print("Criterios AIC y BIC - Modelo Local:")
+print(Criterioslocal)
+
+MSE_local = modelocal$MSE
+print(paste("MSE Modelo Local:", round(MSE_local, 6)))
+
+# Gráficos de residuos
+win.graph(width = 12, height = 6)
+plot(residuals(modelocal),
+     ylim = c(min(-2*sqrt(MSE_local), residuals(modelocal)),
+             max(2*sqrt(MSE_local), residuals(modelocal))),
+     ylab = "Residuos",
+     main = "Residuos vs Tiempo - Modelo Local")
+abline(h = c(-2*sqrt(MSE_local), 0, 2*sqrt(MSE_local)), lty = 2, col = 2)
+grid()
+
+win.graph(width = 12, height = 6)
+plot(as.numeric(fitted(modelocal)), residuals(modelocal),
+     ylim = c(min(-2*sqrt(MSE_local), residuals(modelocal)),
+             max(2*sqrt(MSE_local), residuals(modelocal))),
+     xlab = "Valores Ajustados",
+     ylab = "Residuos",
+     main = "Residuos vs Ajustados - Modelo Local")
+abline(h = c(-2*sqrt(MSE_local), 0, 2*sqrt(MSE_local)), lty = 2, col = 2)
+grid()
+
+# Pronósticos modelo local
+pronoslocal = modelocal$forecast
+ytpronlocal = pronoslocal[,1]
+
+print("Precisión pronósticos Modelo Local:")
+print(accuracy(ytpronlocal, ytnuevo))
+
+amplcobmodelocal = amplitud.cobertura(real = ytnuevo, 
+                                      LIP = pronoslocal[,2], 
+                                      LSP = pronoslocal[,3])
+ScoreIPlocal = IntervalScore(real = ytnuevo, 
+                            LIP = pronoslocal[,2], 
+                            LSP = pronoslocal[,3], 
+                            alpha = 0.05)
+
+print(paste("Amplitud media IP:", round(amplcobmodelocal[1], 4)))
+print(paste("Cobertura IP:", round(amplcobmodelocal[2], 4), "%"))
+print(paste("Score promedio IP:", round(ScoreIPlocal, 4)))
+
+# Evaluación supuesto de ruido blanco
+win.graph(width = 12, height = 6)
+acf(residuals(modelocal), ci.type = "ma", lag.max = 36, 
+    main = "ACF Residuos - Modelo Local", ci.col = 2)
+
+win.graph(width = 12, height = 6)
+pacf(residuals(modelocal), lag.max = 36, 
+     main = "PACF Residuos - Modelo Local", ci.col = 2)
+
+print("Test Ljung-Box - Modelo Local:")
+BP.LB.test(residuals(modelocal), maxlag = 36, type = "Ljung")
+
+# PASO 15: GRÁFICO COMPARATIVO DE PRONÓSTICOS ===============================
+
+win.graph(width = 14, height = 8)
+plot(ytnuevo, 
+     xaxt = "n",
+     ylim = c(min(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4, ytpronlocal),
+             max(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4, ytpronlocal) + 5),
+     type = "b", 
+     pch = 19, 
+     lwd = 4,
+     main = "Comparación de Pronósticos - Validación Cruzada",
+     ylab = "Índice",
+     xlab = "Período")
+
+lines(ytpron1, type = "b", pch = 2, lty = 2, lwd = 3, col = 2)
+lines(ytpron2, type = "b", pch = 3, lty = 3, lwd = 3, col = 4)
+lines(ytpron3, type = "b", pch = 4, lty = 4, lwd = 3, col = 5)
+lines(ytpron4, type = "b", pch = 5, lty = 5, lwd = 3, col = 6)
+lines(ytpronlocal, type = "b", pch = 6, lty = 6, lwd = 3, col = 7)
+
+axis(1, at = time(ytnuevo),
+     labels = paste0(paste0(month.abb[c(6:12, 1:5)], "-"), c(rep(24, 7), rep(25, 5))),
+     cex.axis = 0.8)
+
+legend("topleft",
+       legend = c("Real", "Modelo 1 (AR17)", "Modelo 2 (ARMA14,13)", 
+                 "Modelo 3 (ARMA10,1)(2,0)[12]", "Modelo 4 (Reducido)", 
+                 "Modelo Local (HW)"),
+       pch = c(19, 2:6),
+       col = c(1, 2, 4:7),
+       lwd = c(4, 3, 3, 3, 3, 3),
+       lty = c(1:6),
+       cex = 0.8)
+grid()
+
+# PASO 16: TABLAS RESUMEN ===================================================
+
+print("=== TABLAS RESUMEN DE RESULTADOS ===")
+
+# Tabla de criterios de información
+tabla_criterios = rbind(Criteriosglobal, Criteriosmodelo1, Criteriosmodelo2, 
+                       Criteriosmodelo3, Criteriosmodelo4, Criterioslocal)
+rownames(tabla_criterios) = c("Modelo Global", "Modelo 1 (AR17)", 
+                              "Modelo 2 (ARMA14,13)", "Modelo 3 (ARMA10,1)(2,0)[12]",
+                              "Modelo 4 (Reducido)", "Modelo Local (HW)")
+
+print("TABLA DE CRITERIOS DE INFORMACIÓN:")
+print(round(tabla_criterios, 4))
+
+# Tabla de precisión pronósticos puntuales
+precision_puntuales = rbind(
+  accuracy(ytpronglobal, ytnuevo),
+  accuracy(ytpron1, ytnuevo),
+  accuracy(ytpron2, ytnuevo),
+  accuracy(ytpron3, ytnuevo),
+  accuracy(ytpron4, ytnuevo),
+  accuracy(ytpronlocal, ytnuevo)
+)[, c(2, 3, 5)]
+
+rownames(precision_puntuales) = c("Global", "Modelo 1", "Modelo 2", 
+                                  "Modelo 3", "Modelo 4", "Local")
+colnames(precision_puntuales) = c("RMSE", "MAE", "MAPE")
+
+print("TABLA DE PRECISIÓN PRONÓSTICOS PUNTUALES:")
+print(round(precision_puntuales, 4))
+
+# Tabla de precisión intervalos
+amplitudes = c(amplcobmodglobal[1], amplcobmodelo1[1], amplcobmodelo2[1], 
+              amplcobmodelo3[1], amplcobmodelo4[1], amplcobmodelocal[1])
+coberturas = c(amplcobmodglobal[2], amplcobmodelo1[2], amplcobmodelo2[2], 
+              amplcobmodelo3[2], amplcobmodelo4[2], amplcobmodelocal[2])
+scores = c(NA, ScoreIP1, ScoreIP2, ScoreIP3, ScoreIP4, ScoreIPlocal)
+
+precision_intervalos = data.frame(
+  Amplitud_Media = amplitudes,
+  Cobertura_Pct = coberturas,
+  Score_Promedio = scores
+)
+rownames(precision_intervalos) = c("Global", "Modelo 1", "Modelo 2", 
+                                   "Modelo 3", "Modelo 4", "Local")
+
+print("TABLA DE PRECISIÓN INTERVALOS DE PREDICCIÓN:")
+print(round(precision_intervalos, 4))
+
+# Tabla completa
+tabla_completa = cbind(tabla_criterios, precision_puntuales, precision_intervalos)
+
+print("TABLA RESUMEN COMPLETA:")
+print(round(tabla_completa, 4))
+
+# Tabla Ljung-Box comparativa
+print("=== TABLA LJUNG-BOX COMPARATIVA ===")
+
+tabla_LjungBox = cbind(
+  BP.LB.test(residuals(modelo1), maxlag = 36, type = "Ljung"),
+  BP.LB.test(residuals(modelo2), maxlag = 36, type = "Ljung"),
+  BP.LB.test(residuals(modelo3), maxlag = 36, type = "Ljung"),
+  BP.LB.test(residuals(modelo4), maxlag = 36, type = "Ljung")
+)[, c(1, 3, 4, 6, 7, 9, 10, 12)]
+
+colnames(tabla_LjungBox) = c("QLB-M1", "vp-M1", "QLB-M2", "vp-M2", 
+                             "QLB-M3", "vp-M3", "QLB-M4", "vp-M4")
+
+print(round(tabla_LjungBox, 6))
+
+# Tabla Shapiro-Wilk
+print("=== TABLA SHAPIRO-WILK ===")
+
+# Solo realizar test si no hay correlaciones significativas
+realizar_shapiro = function(residuos, nombre) {
+  n_rechazos_acf = sum(abs(acf(residuos, plot = FALSE, lag.max = 36)$acf[-1]) > 1.96/sqrt(length(residuos)))
+  
+  if(n_rechazos_acf == 0) {
+    return(shapiro.test(residuos)[c(1,2)])
+  } else {
+    return(list(statistic = NA, p.value = NA))
+  }
+}
+
+tabla_Shapiro = rbind(
+  unlist(realizar_shapiro(residuals(modelo1), "M1")),
+  unlist(realizar_shapiro(residuals(modelo2), "M2")),
+  unlist(realizar_shapiro(residuals(modelo3), "M3")),
+  unlist(realizar_shapiro(residuals(modelo4), "M4"))
+)
+
+rownames(tabla_Shapiro) = c("Modelo1", "Modelo2", "Modelo3", "Modelo4")
+colnames(tabla_Shapiro) = c("W", "p-value")
+
+print(round(tabla_Shapiro, 6))
+
+# PASO 17: EXPORTAR RESULTADOS A CSV =========================================
+
+print("=== EXPORTANDO RESULTADOS A CSV ===")
+
+# Exportar tabla de parámetros Modelo Global
+write.csv2(coef(modglobal), 
+          "parametros_modelo_global_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de parámetros Modelo 1
+write.csv2(coef(modelo1), 
+          "parametros_modelo1_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de parámetros Modelo 2
+write.csv2(coef(modelo2), 
+          "parametros_modelo2_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de parámetros Modelo 3
+write.csv2(coef(modelo3), 
+          "parametros_modelo3_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de parámetros Modelo 4
+write.csv2(coef(modelo4), 
+          "parametros_modelo4_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar pronósticos de todos los modelos
+tabla_pronosticos = cbind(
+  Real = as.numeric(ytnuevo),
+  Global = as.numeric(ytpronglobal),
+  Modelo1 = as.numeric(ytpron1),
+  Modelo2 = as.numeric(ytpron2),
+  Modelo3 = as.numeric(ytpron3),
+  Modelo4 = as.numeric(ytpron4),
+  Local = as.numeric(ytpronlocal)
+)
+rownames(tabla_pronosticos) = paste(trunc(time(ytnuevo)), cycle(ytnuevo), sep = "-")
+
+write.csv2(tabla_pronosticos, 
+          "pronosticos_todos_modelos_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de criterios
+write.csv2(tabla_criterios, 
+          "tabla_criterios_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla de precisión
+write.csv2(tabla_completa, 
+          "resumen_completo_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla Ljung-Box
+write.csv2(tabla_LjungBox, 
+          "tabla_ljungbox_datos7.csv", 
+          row.names = TRUE)
+
+# Exportar tabla Shapiro
+write.csv2(tabla_Shapiro, 
+          "tabla_shapiro_datos7.csv", 
+          row.names = TRUE)
+
+# PASO 18: DIAGNÓSTICOS FINALES Y COMPARACIONES =============================
+
+print("=== DIAGNÓSTICOS FINALES ===")
+
+# Identificar mejor modelo según diferentes criterios
+mejor_AIC = which.min(tabla_criterios[, "AIC"])
+mejor_BIC = which.min(tabla_criterios[, "BIC"])
+mejor_RMSE = which.min(precision_puntuales[, "RMSE"])
+mejor_MAE = which.min(precision_puntuales[, "MAE"])
+mejor_MAPE = which.min(precision_puntuales[, "MAPE"])
+mejor_cobertura = which.max(precision_intervalos[, "Cobertura_Pct"])
+mejor_score = which.min(precision_intervalos[, "Score_Promedio"], na.rm = TRUE)
+
+print("MEJORES MODELOS POR CRITERIO:")
+print(paste("Mejor AIC:", rownames(tabla_criterios)[mejor_AIC]))
+print(paste("Mejor BIC:", rownames(tabla_criterios)[mejor_BIC]))
+print(paste("Mejor RMSE:", rownames(precision_puntuales)[mejor_RMSE]))
+print(paste("Mejor MAE:", rownames(precision_puntuales)[mejor_MAE]))
+print(paste("Mejor MAPE:", rownames(precision_puntuales)[mejor_MAPE]))
+print(paste("Mejor Cobertura:", rownames(precision_intervalos)[mejor_cobertura]))
+print(paste("Mejor Score IP:", rownames(precision_intervalos)[mejor_score]))
+
+# Ranking general
+ranking_criterios = rank(tabla_criterios[, "AIC"]) + rank(tabla_criterios[, "BIC"])
+ranking_precision = rank(precision_puntuales[, "RMSE"]) + 
+                   rank(precision_puntuales[, "MAE"]) + 
+                   rank(precision_puntuales[, "MAPE"])
+ranking_intervalos = rank(-precision_intervalos[, "Cobertura_Pct"]) + 
+                    rank(precision_intervalos[, "Score_Promedio"])
+
+ranking_general = ranking_criterios + ranking_precision + ranking_intervalos
+names(ranking_general) = rownames(tabla_criterios)
+
+print("RANKING GENERAL DE MODELOS (menor es mejor):")
+print(sort(ranking_general))
+
+print("=== MEJOR MODELO GENERAL ===")
+print(names(sort(ranking_general))[1])
+
+# PASO 19: INFORMACIÓN PARA EL INFORME ======================================
+
+cat("\n=================================================================\n")
+cat("INFORMACIÓN CLAVE PARA EL INFORME\n")
+cat("=================================================================\n")
+
+cat("\n1. ECUACIONES DE LOS MODELOS:\n")
+cat("Modelo Global: Y_t = exp(β₀ + β₁t + Σδᵢxᵢₜ) + E_t, E_t ~ iid N(0,σ²)\n")
+cat("Modelo 1: Y_t = exp(...) + E_t, E_t = Σφⱼ E_{t-j} + a_t (AR17)\n")
+cat("Modelo 2: Y_t = exp(...) + E_t, E_t = ARMA(14,13)\n")
+cat("Modelo 3: Y_t = exp(...) + E_t, E_t = ARMA(10,1)(2,0)[12]\n")
+cat("Modelo 4: Y_t = exp(...) + E_t, E_t = ARMA(17,13) reducido\n")
+cat("Modelo Local: Y_t = (L_{t-1} + T_{t-1}) × S_{t-s} + E_t (HW Mult)\n")
+
+cat("\n2. SERIE ANALIZADA:\n")
+cat("Variable: Prendas de vestir y textiles\n")
+cat("Período: Enero 2013 - Mayo 2025\n")
+cat("Frecuencia: Mensual\n")
+cat("Total observaciones:", length(Datos7), "\n")
+cat("Muestra ajuste:", n, "obs (Ene 2013 - May 2024)\n")
+cat("Muestra validación:", m, "obs (Jun 2024 - May 2025)\n")
+cat("Tipo: Serie multiplicativa\n")
+
+cat("\n3. CARACTERÍSTICAS DEL MEJOR MODELO:\n")
+mejor_idx = which.min(ranking_general)
+cat("Modelo seleccionado:", names(ranking_general)[mejor_idx], "\n")
+cat("AIC:", round(tabla_criterios[mejor_idx, "AIC"], 4), "\n")
+cat("BIC:", round(tabla_criterios[mejor_idx, "BIC"], 4), "\n")
+cat("RMSE:", round(precision_puntuales[mejor_idx, "RMSE"], 4), "\n")
+cat("MAE:", round(precision_puntuales[mejor_idx, "MAE"], 4), "\n")
+cat("MAPE:", round(precision_puntuales[mejor_idx, "MAPE"], 4), "%\n")
+cat("Cobertura IP:", round(precision_intervalos[mejor_idx, "Cobertura_Pct"], 2), "%\n")
+
+cat("\n4. RESTRICCIONES IMPORTANTES:\n")
+cat("- Modelo Global: Exponencial polinomial grado 1\n")
+cat("- Estacionalidad: Indicadoras enero-noviembre (diciembre referencia)\n")
+cat("- Modelos ARMA: Usar method='CSS-ML' según Tabla 1\n")
+cat("- Modelo Local: HW con beta=1e-5, gamma=1e-5\n")
+
+cat("\n5. VALIDACIÓN DE SUPUESTOS:\n")
+cat("Usar los siguientes tests:\n")
+cat("- ACF y PACF con lag.max=36\n")
+cat("- Test Ljung-Box con m=6,12,18,24,30,36\n")
+cat("- Test Shapiro-Wilk (solo si no hay correlaciones)\n")
+cat("- Gráficos: residuos vs tiempo, residuos vs ajustados, Q-Q plot\n")
+
+cat("\n=================================================================\n")
+cat("PROGRAMA COMPLETADO EXITOSAMENTE\n")
+cat("=================================================================\n")
+
+print("Archivos CSV generados en el directorio de trabajo:")
+print("1. parametros_modelo_global_datos7.csv")
+print("2. parametros_modelo1_datos7.csv")
+print("3. parametros_modelo2_datos7.csv")
+print("4. parametros_modelo3_datos7.csv")
+print("5. parametros_modelo4_datos7.csv")
+print("6. pronosticos_todos_modelos_datos7.csv")
+print("7. tabla_criterios_datos7.csv")
+print("8. resumen_completo_datos7.csv")
+print("9. tabla_ljungbox_datos7.csv")
+print("10. tabla_shapiro_datos7.csv")
+
+print("\n¡ANÁLISIS COMPLETADO! Revise los gráficos y tablas generadas.")
+
+# PASO 20: NOTAS IMPORTANTES PARA EL INFORME ================================
+
+cat("\n=================================================================\n")
+cat("NOTAS IMPORTANTES PARA REDACTAR EL INFORME\n")
+cat("=================================================================\n")
+
+cat("\nSECCIÓN 1 - INTRODUCCIÓN:\n")
+cat("- Mencionar que es continuación del Trabajo 1\n")
+cat("- Indicar variable: Prendas de vestir y textiles\n")
+cat("- Fechas: Enero 2013 - Mayo 2025 (149 obs)\n")
+cat("- Modelo global asignado: Exponencial polinomial grado 1\n")
+cat("- Mejores modelos Trabajo 1: mencionar cuál fue mejor (global vs local)\n")
+
+cat("\nSECCIÓN 2 - ANÁLISIS DESCRIPTIVO:\n")
+cat("- Describir patrones: tendencia, estacionalidad, ciclos\n")
+cat("- Analizar ACF: ¿es estacionaria? ¿por qué?\n")
+cat("- Efectos de T_t y S_t en la ACF\n")
+cat("- Resultados modelo global: ajuste y pronósticos\n")
+
+cat("\nSECCIÓN 3 - VALIDACIÓN SUPUESTOS Y IDENTIFICACIÓN:\n")
+cat("- Tabla D (Apéndice D): Evaluar RB y estacionariedad\n")
+cat("- Analizar: media cero, var constante, independencia\n")
+cat("- Tabla E (Apéndice E): Presentar todos los modelos identificados\n")
+cat("- Incluir: ACF-PACF, EACF, SelectModel, auto.arima, armasubsets\n")
+
+cat("\nSECCIÓN 4 - MODELOS CON ERRORES ARMA:\n")
+cat("- Ecuaciones teóricas de los 4 modelos\n")
+cat("- Tablas de parámetros (formato del documento ejemplo)\n")
+cat("- Tabla F (Apéndice F): Significancia de parámetros\n")
+cat("- Gráficos de ajuste para cada modelo\n")
+
+cat("\nSECCIÓN 5 - ANÁLISIS DE RESIDUOS:\n")
+cat("- Definir: â_t = Y_t - Ŷ_t (residuos de ajuste)\n")
+cat("- Tabla G (Apéndice G): Evaluación supuestos\n")
+cat("- Gráficos: residuos vs tiempo, vs ajustados, ACF, PACF, Q-Q\n")
+cat("- Tests: Ljung-Box, Shapiro-Wilk\n")
+
+cat("\nSECCIÓN 6 - PRONÓSTICOS:\n")
+cat("- Ecuación pronósticos (solo Modelo 3)\n")
+cat("- Tabla comparativa de pronósticos\n")
+cat("- Interpretar MAE, MAPE, RMSE\n")
+cat("- Analizar amplitud, cobertura, score de IPs\n")
+cat("- Gráfico comparativo de pronósticos puntuales\n")
+
+cat("\nSECCIÓN 7 - COMPARACIÓN ARMA VS LOCAL:\n")
+cat("- Modelo local: HW Multiplicativo\n")
+cat("- Comparar: ajuste, pronósticos, validez supuestos\n")
+cat("- Tabla G para modelo local también\n")
+
+cat("\nSECCIÓN 8 - CONCLUSIONES:\n")
+cat("- Resumen resultados principales\n")
+cat("- Problemas en la modelación\n")
+cat("- Mejor modelo (priorizar validez supuestos)\n")
+cat("- ¿Captura dinámica de la serie?\n")
+cat("- ¿Pronósticos realistas y confiables?\n")
+cat("- Críticas al mejor modelo\n")
+cat("- Recomendación: ¿ajuste global ARMA o local?\n")
+
+cat("\n=================================================================\n")
+cat("RECUERDE PARA EL INFORME:\n")
+cat("=================================================================\n")
+cat("1. Máximo 16 páginas\n")
+cat("2. Usar plantilla PlantillaTrabajosv06.docx\n")
+cat("3. Todas las tablas en formato Times New Roman 7pts\n")
+cat("4. Tablas con formato del documento Ejemplostablasmodelostrab2.docx\n")
+cat("5. Usar tablas de Apéndices D, E, F, G\n")
+cat("6. Print-screens de consola R para identificación automática\n")
+cat("7. Gráfico armasubsets según Apéndice H\n")
+cat("8. Numerar todas las figuras y tablas\n")
+cat("9. Citar ecuaciones correctamente\n")
+cat("10. No incluir código R en el informe, solo resultados\n")
+cat("=================================================================\n")
