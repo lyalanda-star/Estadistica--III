@@ -471,18 +471,7 @@ print("=== AJUSTANDO MODELO 4: ARMA(17,13) REDUCIDO ===")
 # Entonces agregar φ₄ y φ₁₀
 
 fixed_vector = c(
-  NA,      # φ₁
-  0,       # φ₂
-  NA,      # φ₃
-  NA,      # φ₄ (agregar según instrucciones)
-  rep(0, 5),  # φ₅ a φ₉
-  NA,      # φ₁₀ (agregar según instrucciones)
-  rep(0, 6),  # φ₁₁ a φ₁₆
-  NA,      # φ₁₇
-  NA,      # θ₁
-  rep(0, 11), # θ₂ a θ₁₂
-  NA       # θ₁₃
-)
+ c(NA,NA,0,NA,0,0,0,NA,0,NA,rep(0,4),NA , rep(0,10),NA,rep(0,5), NA,))
 
 modelo4 = regexpo.ErrorARMAv03(respuesta = yt,
                                data = X,
