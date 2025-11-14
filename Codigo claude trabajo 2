@@ -732,7 +732,7 @@ rownames(precision_puntuales) = c("Global", "Modelo 1", "Modelo 2",
 colnames(precision_puntuales) = c("RMSE", "MAE", "MAPE")
 
 print("TABLA DE PRECISIÓN PRONÓSTICOS PUNTUALES:")
-print(round(precision_puntuales, 4))
+print(round(precision_puntuales, 6))
 
 # Tabla de precisión intervalos
 amplitudes = c(amplcobmodglobal[1], amplcobmodelo1[1], amplcobmodelo2[1], 
