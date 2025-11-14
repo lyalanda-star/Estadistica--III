@@ -456,24 +456,18 @@ print(paste("Amplitud media IP:", round(amplcobmodelo3[1], 4)))
 print(paste("Cobertura IP:", round(amplcobmodelo3[2], 4), "%"))
 print(paste("Score promedio IP:", round(ScoreIP3, 4)))
 
-# PASO 12: MODELO 4 - ARMA(17,13) CON PARÁMETROS ESPECÍFICOS ================
+# PASO 12: MODELO 4 - ARMA(p,q) CON PARÁMETROS ESPECÍFICOS ================
 # Según Tabla 1: armasubsets 18x18, renglón 3, incluir φ₄, φ₁₀
 # y usar method="CSS-ML"
 
-print("=== AJUSTANDO MODELO 4: ARMA(17,13) REDUCIDO ===")
+fixed_vector = c(
+  # AR(1–18)
+  NA, NA, 0, NA, 0, 0, 0, NA, 0, NA, 0, 0, 0, 0, NA, 0, 0, 0,
+  # MA(1–18)
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NA, 0, 0, 0, 0, 0, NA, 0
+)
+length(fixed_vector)  # 36
 
-# Definir vector fixed para incluir solo φ₄ y φ₁₀ además de los del renglón 3
-# NOTA: Debes verificar cuáles parámetros están en el renglón 3 del armasubsets
-# y agregar φ₄ (posición 4) y φ₁₀ (posición 10)
-
-# Ejemplo de fixed (ajustar según armasubsets real):
-# Si renglón 3 tiene φ₁, φ₃, φ₁₇ y θ₁, θ₁₃
-# Entonces agregar φ₄ y φ₁₀
-
-#fixed_vector = c(NA,NA,0,NA,0,0,0,NA,0,NA,rep(0,4),NA , rep(0,13),NA,rep(0,5), NA,0)
-
-
-fixed_vector = c(NA, NA, 0, NA, 0,0,0,NA, 0,NA , rep(0,4), NA, 0,0, rep(0,10), NA , rep(0,5), NA, 0)
 
 modelo4 = regexpo.ErrorARMAv03(
   respuesta = yt,
@@ -494,7 +488,7 @@ ythat4 = fitted(modelo4)
 # Gráfico ajuste
 win.graph(width = 12, height = 6)
 plot(Datos7,
-     main = "Ajuste Modelo 4: ARMA(17,13) Reducido",
+     main = "Ajuste Modelo 4: ARMA(15,17) Reducido",
      ylab = "Índice",
      xlab = "Tiempo",
      lwd = 2)
