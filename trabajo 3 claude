@@ -1,0 +1,823 @@
+# LIMPIEZA Y CONFIGURACIÓN INICIAL ===========================================
+rm(list=ls(all=TRUE))
+
+# LIBRERÍAS Y FUNCIONES DE USUARIO ===========================================
+library(forecast)
+library(lmtest)
+library(TSA)
+library(uroot)
+library(pdR)
+
+# Cargar funciones de usuario
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-Criterios.Informacion-Calidad.Intervalos.R")
+source("https://raw.githubusercontent.com/NelfiGonzalez/Funciones-de-Usuario-Estadistica-III/main/Funciones-BP.LB.test-pruebaDW1.R")
+
+# LECTURA Y PREPARACIÓN DE DATOS =============================================
+# Leer datos (ajustar según su archivo)
+# Para Datos7: Índice de ventas nominales - Prendas de vestir y textiles
+datos7 = read.table(file.choose(), header=T, sep=";", skip=15, dec=",", 
+                    colClasses=c(rep("NULL",5),"numeric",rep("NULL",5)))
+datos7 = ts(datos7, freq=12, start=c(2013,1))
+
+# Parámetros de validación cruzada
+m = 12  # Número de periodos para pronóstico (validación cruzada)
+n = length(datos7) - m  # n = 137 (enero 2013 a mayo 2024)
+t = 1:n
+
+# Definir fechas
+anio_inicio = 2013
+mes_inicio = 1
+anio_expost = 2024
+mes_expost = 6
+
+# Serie recortada para ajuste
+yt = ts(datos7[t], freq=12, start=c(anio_inicio, mes_inicio))
+
+# Datos para validación cruzada
+tnuevo = (n+1):length(datos7)
+ytnuevo = ts(datos7[tnuevo], freq=12, start=c(anio_expost, mes_expost))
+
+# ============================================================================
+# PUNTO 1: ANÁLISIS DESCRIPTIVO Y TEST HEGY
+# ============================================================================
+
+# 1.b) GRÁFICAS Y ACF --------------------------------------------------------
+
+# Serie original (para verificar multiplicatividad)
+win.graph(width=4, height=3.5)
+plot(yt, main="", ylab="yt", xlab="Tiempo")
+title(main="Serie observada - Datos7", cex.main=1)
+
+# IMPORTANTE: Como la serie es MULTIPLICATIVA, trabajamos con log(Yt)
+win.graph(width=4, height=3.5)
+plot(log(yt), main="", ylab="log(yt)", xlab="Tiempo")
+title(main="Logaritmo natural de la serie", cex.main=1)
+
+# ACF de log(Yt)
+win.graph(width=4, height=3.5)
+acf(as.numeric(log(yt)), ci.type="ma", lag.max=36, main="", lwd=3, 
+    cex.lab=0.8, cex.axis=0.6)
+title(main=expression(paste("ACF de ", log(Y[t]))), cex.main=1)
+abline(v=seq(12,36,by=12), col=2, lty=2)
+
+# Primera diferencia regular ∇log(Yt)
+difd1 = diff(log(yt))
+win.graph(width=4, height=3.5)
+plot(difd1, main="", ylab="", xlab="Tiempo")
+title(main=expression(paste("Primera diferencia regular ", nabla, log(Y[t]))), 
+      cex.main=1)
+
+win.graph(width=4, height=3.5)
+acf(as.numeric(difd1), ci.type="ma", lag.max=36, main="", lwd=3, 
+    cex.lab=0.8, cex.axis=0.6)
+title(main=expression(paste("ACF de ", nabla, log(Y[t]))), cex.main=1)
+abline(v=seq(12,36,by=12), col=2, lty=2)
+
+# Primera diferencia estacional ∇₁₂log(Yt)
+difD12 = diff(log(yt), lag=12)
+win.graph(width=4, height=3.5)
+plot(difD12, main="", ylab="", xlab="Tiempo")
+title(main=expression(paste("Primera diferencia estacional ", nabla[12], log(Y[t]))), 
+      cex.main=1)
+
+win.graph(width=4, height=3.5)
+acf(as.numeric(difD12), ci.type="ma", lag.max=36, main="", lwd=3, 
+    cex.lab=0.8, cex.axis=0.6)
+title(main=expression(paste("ACF de ", nabla[12], log(Y[t]))), cex.main=1)
+abline(v=seq(12,36,by=12), col=2, lty=2)
+
+# Diferencia mixta ∇∇₁₂log(Yt)
+difdD12 = diff(diff(log(yt), lag=12), 1)
+win.graph(width=4, height=3.5)
+plot(difdD12, main="", ylab="", xlab="Tiempo")
+title(main=expression(paste("Diferencia mixta ", nabla, nabla[12], log(Y[t]))), 
+      cex.main=1)
+
+win.graph(width=4, height=3.5)
+acf(as.numeric(difdD12), ci.type="ma", lag.max=36, main="", lwd=3, 
+    cex.lab=0.8, cex.axis=0.6)
+title(main=expression(paste("ACF de ", nabla, nabla[12], log(Y[t]))), cex.main=1)
+abline(v=seq(12,36,by=12), col=2, lty=2)
+
+# 1.c) TEST HEGY -------------------------------------------------------------
+# Sobre log(yt) con los primeros n=137 datos
+# Según Tabla 1: Para Datos7 NO hay nota especial, usar configuración estándar
+test_hegy = HEGY.test(wts=log(yt), itsd=c(0,0,c(0)), 
+                       selectlags=list(mode="aic", Pmax=12))
+print(test_hegy$stats)
+
+# ============================================================================
+# PUNTO 2: IDENTIFICACIÓN DE MODELOS SARIMA
+# ============================================================================
+
+# 2.a) IDENTIFICACIÓN CON ACF-PACF ------------------------------------------
+# Según Tabla 1, Datos7: d=D=1
+
+# ACF de la serie diferenciada (d=1, D=1)
+win.graph(width=5, height=3.5)
+acf(as.numeric(difdD12), ci.type="ma", lag.max=36, lwd=3, main="", 
+    cex.lab=0.8, cex.axis=0.6)
+title(main="ACF diferencia regular y estacional (d=D=1)", cex.main=1)
+abline(v=c(12,24,36), lty=2, col=2)
+
+# PACF de la serie diferenciada (d=1, D=1)
+win.graph(width=5, height=3.5)
+pacf(as.numeric(difdD12), lag.max=36, lwd=3, main="", 
+     cex.lab=0.8, cex.axis=0.6)
+title(main="PACF diferencia regular y estacional (d=D=1)", cex.main=1)
+abline(v=c(12,24,36), lty=2, col=2)
+
+# 2.b) IDENTIFICACIÓN CON AUTO.ARIMA ----------------------------------------
+# Aplicar sobre log(yt) recortada a n=137
+auto.arima(log(yt), ic="aic", seasonal.test="ocsb")
+auto.arima(log(yt), ic="aic", seasonal.test="ch")
+auto.arima(log(yt), ic="aic", seasonal.test="seas")
+auto.arima(log(yt), ic="bic", seasonal.test="ocsb")
+auto.arima(log(yt), ic="bic", seasonal.test="ch")
+auto.arima(log(yt), ic="bic", seasonal.test="seas")
+
+# 2.c) IDENTIFICACIÓN CON ARMASUBSETS ---------------------------------------
+# Según Tabla 1, Datos7:
+# Modelo 3: armasubsets 12x12, método 'ml', renglón 4 y agregar Φ₁, Θ₂
+# Modelo 4: armasubsets 12x12, método 'ml', renglón 6
+
+# Armasubsets 12x12
+win.graph(width=10, height=5)
+plot(armasubsets(difdD12, nar=12, nma=12, y.name="AR", ar.method="ml"))
+
+# ============================================================================
+# PUNTO 3: AJUSTE DE MODELOS CON VALIDACIÓN CRUZADA
+# ============================================================================
+
+# Según Tabla 1, Datos7, los 4 modelos son:
+# Modelo 1: ARIMA(7,1,0)(0,1,1)[12]* 
+# Modelo 2: ARIMA(3,0,0)(2,1,0)[12] sin deriva
+# Modelo 3: armasubsets 12x12 método 'ml', renglón 4 y agregar Φ₁, Θ₂
+# Modelo 4: armasubsets 12x12 método 'ml', renglón 6
+
+# MODELO 1: ARIMA(7,1,0)(0,1,1)[12] --------------------------------------
+# *No resulta directamente de ACF-PACF, es modelo propuesto
+
+modelo1 = Arima(log(yt), order=c(7,1,0), seasonal=list(order=c(0,1,1)), 
+                method="ML")
+
+# Tabla de parámetros estimados
+coeftest(modelo1)
+
+# Valores ajustados en escala original (con factor de corrección lognormal)
+ythat1 = exp(modelo1$fitted) * exp(modelo1$sigma2/2)
+
+# Gráfico del ajuste
+win.graph()
+plot(datos7, main="Ajuste Modelo 1", ylab="Datos7")
+lines(ythat1, col=2, lwd=2)
+legend("topleft", legend=c("Original", "Ajuste Modelo 1"), lty=1, col=1:2)
+
+# Cálculo de AIC y BIC
+k1 = length(coef(modelo1)[coef(modelo1)!=0])
+Res.orig1 = yt - ythat1
+Criteriosmodelo1 = exp.crit.inf.resid(residuales=Res.orig1, n.par=k1)
+Criteriosmodelo1
+
+# MODELO 2: ARIMA(3,0,0)(2,1,0)[12] con deriva ------------------------------
+modelo2 = Arima(log(yt), order=c(3,0,0), seasonal=list(order=c(2,1,0)), 
+                include.drift=TRUE, method="ML")
+
+coeftest(modelo2)
+
+ythat2 = exp(modelo2$fitted) * exp(modelo2$sigma2/2)
+
+win.graph()
+plot(datos7, main="Ajuste Modelo 2", ylab="Datos7")
+lines(ythat2, col=2, lwd=2)
+legend("topleft", legend=c("Original", "Ajuste Modelo 2"), lty=1, col=1:2)
+
+k2 = length(coef(modelo2)[coef(modelo2)!=0])
+Res.orig2 = yt - ythat2
+Criteriosmodelo2 = exp.crit.inf.resid(residuales=Res.orig2, n.par=k2)
+Criteriosmodelo2
+
+# MODELO 3: Del armasubsets 12x12, renglón 4, agregar Φ₁, Θ₂ ---------------
+# NOTA: Debes identificar del gráfico armasubsets cuáles parámetros van
+# Ejemplo basado en la estructura típica del renglón 4:
+# Supongamos ARIMA(p,1,q)(P,1,Q)[12] con algunos coeficientes en cero
+
+# AJUSTAR SEGÚN LO QUE OBSERVES EN EL GRÁFICO ARMASUBSETS
+# Ejemplo ilustrativo (DEBES MODIFICAR según tu gráfico):
+modelo3 = Arima(log(yt), order=c(5,1,3), seasonal=list(order=c(1,1,2)), 
+                fixed=c(NA,0,0,NA,NA,  # AR part (ejemplo)
+                        NA,0,NA,        # MA part (ejemplo)
+                        NA,             # SAR part
+                        NA,NA),         # SMA part
+                method="ML")
+
+coeftest(modelo3)
+
+ythat3 = exp(modelo3$fitted) * exp(modelo3$sigma2/2)
+
+win.graph()
+plot(datos7, main="Ajuste Modelo 3", ylab="Datos7")
+lines(ythat3, col=2, lwd=2)
+legend("topleft", legend=c("Original", "Ajuste Modelo 3"), lty=1, col=1:2)
+
+k3 = length(coef(modelo3)[coef(modelo3)!=0])
+Res.orig3 = yt - ythat3
+Criteriosmodelo3 = exp.crit.inf.resid(residuales=Res.orig3, n.par=k3)
+Criteriosmodelo3
+
+# MODELO 4: Del armasubsets 12x12, renglón 6 --------------------------------
+# AJUSTAR SEGÚN LO QUE OBSERVES EN EL GRÁFICO ARMASUBSETS
+modelo4 = Arima(log(yt), order=c(6,1,4), seasonal=list(order=c(1,1,1)), 
+                fixed=c(NA,0,NA,0,0,NA,  # AR part (ejemplo)
+                        NA,0,0,NA,        # MA part (ejemplo)
+                        NA,               # SAR part
+                        NA),              # SMA part
+                method="ML")
+
+coeftest(modelo4)
+
+ythat4 = exp(modelo4$fitted) * exp(modelo4$sigma2/2)
+
+win.graph()
+plot(datos7, main="Ajuste Modelo 4", ylab="Datos7")
+lines(ythat4, col=2, lwd=2)
+legend("topleft", legend=c("Original", "Ajuste Modelo 4"), lty=1, col=1:2)
+
+k4 = length(coef(modelo4)[coef(modelo4)!=0])
+Res.orig4 = yt - ythat4
+Criteriosmodelo4 = exp.crit.inf.resid(residuales=Res.orig4, n.par=k4)
+Criteriosmodelo4
+
+# ============================================================================
+# PUNTO 4: ANÁLISIS DE RESIDUALES Y VALIDACIÓN DE SUPUESTOS
+# ============================================================================
+
+# GRÁFICOS DE RESIDUALES ----------------------------------------------------
+# Todos los modelos juntos para comparación
+
+win.graph()
+layout(matrix(c(1,2,3,4), nrow=2, byrow=TRUE))
+plot(residuals(modelo1), main="Residuales Modelo 1", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo1$sigma2), 2*sqrt(modelo1$sigma2)), lty=2, col=2)
+plot(residuals(modelo2), main="Residuales Modelo 2", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo2$sigma2), 2*sqrt(modelo2$sigma2)), lty=2, col=2)
+plot(residuals(modelo3), main="Residuales Modelo 3", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo3$sigma2), 2*sqrt(modelo3$sigma2)), lty=2, col=2)
+plot(residuals(modelo4), main="Residuales Modelo 4", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo4$sigma2), 2*sqrt(modelo4$sigma2)), lty=2, col=2)
+
+# Residuales vs valores ajustados
+win.graph()
+layout(matrix(c(1,2,3,4), nrow=2, byrow=TRUE))
+plot(as.numeric(modelo1$fitted), residuals(modelo1), 
+     main="Modelo 1", xlab="Ajustados", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo1$sigma2), 2*sqrt(modelo1$sigma2)), lty=2, col=2)
+plot(as.numeric(modelo2$fitted), residuals(modelo2), 
+     main="Modelo 2", xlab="Ajustados", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo2$sigma2), 2*sqrt(modelo2$sigma2)), lty=2, col=2)
+plot(as.numeric(modelo3$fitted), residuals(modelo3), 
+     main="Modelo 3", xlab="Ajustados", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo3$sigma2), 2*sqrt(modelo3$sigma2)), lty=2, col=2)
+plot(as.numeric(modelo4$fitted), residuals(modelo4), 
+     main="Modelo 4", xlab="Ajustados", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sqrt(modelo4$sigma2), 2*sqrt(modelo4$sigma2)), lty=2, col=2)
+
+# ACF Y PACF DE RESIDUALES --------------------------------------------------
+# Modelo 1
+win.graph()
+layout(matrix(c(1,2), nrow=1))
+acf(as.numeric(residuals(modelo1)), ci.type="ma", lag.max=36, 
+    main="ACF Residuales Modelo 1", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+pacf(as.numeric(residuals(modelo1)), lag.max=36, 
+     main="PACF Residuales Modelo 1", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+
+# Modelo 2
+win.graph()
+layout(matrix(c(1,2), nrow=1))
+acf(as.numeric(residuals(modelo2)), ci.type="ma", lag.max=36, 
+    main="ACF Residuales Modelo 2", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+pacf(as.numeric(residuals(modelo2)), lag.max=36, 
+     main="PACF Residuales Modelo 2", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+
+# Modelo 3
+win.graph()
+layout(matrix(c(1,2), nrow=1))
+acf(as.numeric(residuals(modelo3)), ci.type="ma", lag.max=36, 
+    main="ACF Residuales Modelo 3", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+pacf(as.numeric(residuals(modelo3)), lag.max=36, 
+     main="PACF Residuales Modelo 3", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+
+# Modelo 4
+win.graph()
+layout(matrix(c(1,2), nrow=1))
+acf(as.numeric(residuals(modelo4)), ci.type="ma", lag.max=36, 
+    main="ACF Residuales Modelo 4", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+pacf(as.numeric(residuals(modelo4)), lag.max=36, 
+     main="PACF Residuales Modelo 4", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+
+# TEST LJUNG-BOX ------------------------------------------------------------
+BP.LB.test(residuals(modelo1), maxlag=36, type="Ljung")
+BP.LB.test(residuals(modelo2), maxlag=36, type="Ljung")
+BP.LB.test(residuals(modelo3), maxlag=36, type="Ljung")
+BP.LB.test(residuals(modelo4), maxlag=36, type="Ljung")
+
+# TEST DE NORMALIDAD --------------------------------------------------------
+# Solo si no se rechaza independencia en ACF y PACF
+
+# Modelo 1
+shapiro.test(residuals(modelo1))
+win.graph()
+qqnorm(residuals(modelo1), main="Q-Q Plot Modelo 1")
+qqline(residuals(modelo1), col=2)
+
+# Modelo 2
+shapiro.test(residuals(modelo2))
+win.graph()
+qqnorm(residuals(modelo2), main="Q-Q Plot Modelo 2")
+qqline(residuals(modelo2), col=2)
+
+# Modelo 3
+shapiro.test(residuals(modelo3))
+win.graph()
+qqnorm(residuals(modelo3), main="Q-Q Plot Modelo 3")
+qqline(residuals(modelo3), col=2)
+
+# Modelo 4
+shapiro.test(residuals(modelo4))
+win.graph()
+qqnorm(residuals(modelo4), main="Q-Q Plot Modelo 4")
+qqline(residuals(modelo4), col=2)
+
+# ============================================================================
+# PUNTO 5: PRONÓSTICOS PARA VALIDACIÓN CRUZADA
+# ============================================================================
+
+# MODELO 1 ------------------------------------------------------------------
+predmodelo1 = exp(as.data.frame(forecast(modelo1, h=12, level=95))) * 
+              exp(modelo1$sigma2/2)
+predmodelo1 = ts(predmodelo1, freq=12, start=start(ytnuevo))
+ytpron1 = predmodelo1[,1]
+
+# Medidas de precisión
+accuracy(ytpron1, ytnuevo)
+amplcob1 = amplitud.cobertura(real=ytnuevo, LIP=predmodelo1[,2], 
+                               LSP=predmodelo1[,3])
+amplcob1
+score1 = IntervalScore(real=ytnuevo, LIP=predmodelo1[,2], 
+                       LSP=predmodelo1[,3], alpha=0.05)
+score1
+
+# MODELO 2 ------------------------------------------------------------------
+predmodelo2 = exp(as.data.frame(forecast(modelo2, h=12, level=95))) * 
+              exp(modelo2$sigma2/2)
+predmodelo2 = ts(predmodelo2, freq=12, start=start(ytnuevo))
+ytpron2 = predmodelo2[,1]
+
+accuracy(ytpron2, ytnuevo)
+amplcob2 = amplitud.cobertura(real=ytnuevo, LIP=predmodelo2[,2], 
+                               LSP=predmodelo2[,3])
+amplcob2
+score2 = IntervalScore(real=ytnuevo, LIP=predmodelo2[,2], 
+                       LSP=predmodelo2[,3], alpha=0.05)
+score2
+
+# MODELO 3 ------------------------------------------------------------------
+predmodelo3 = exp(as.data.frame(forecast(modelo3, h=12, level=95))) * 
+              exp(modelo3$sigma2/2)
+predmodelo3 = ts(predmodelo3, freq=12, start=start(ytnuevo))
+ytpron3 = predmodelo3[,1]
+
+accuracy(ytpron3, ytnuevo)
+amplcob3 = amplitud.cobertura(real=ytnuevo, LIP=predmodelo3[,2], 
+                               LSP=predmodelo3[,3])
+amplcob3
+score3 = IntervalScore(real=ytnuevo, LIP=predmodelo3[,2], 
+                       LSP=predmodelo3[,3], alpha=0.05)
+score3
+
+# MODELO 4 ------------------------------------------------------------------
+predmodelo4 = exp(as.data.frame(forecast(modelo4, h=12, level=95))) * 
+              exp(modelo4$sigma2/2)
+predmodelo4 = ts(predmodelo4, freq=12, start=start(ytnuevo))
+ytpron4 = predmodelo4[,1]
+
+accuracy(ytpron4, ytnuevo)
+amplcob4 = amplitud.cobertura(real=ytnuevo, LIP=predmodelo4[,2], 
+                               LSP=predmodelo4[,3])
+amplcob4
+score4 = IntervalScore(real=ytnuevo, LIP=predmodelo4[,2], 
+                       LSP=predmodelo4[,3], alpha=0.05)
+score4
+
+# GRÁFICO COMPARATIVO DE PRONÓSTICOS ----------------------------------------
+win.graph()
+plot(ytnuevo, xaxt="n", 
+     ylim=c(min(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4)-10,
+            max(ytnuevo, ytpron1, ytpron2, ytpron3, ytpron4)+10),
+     type="b", pch=19, lwd=3, 
+     main="Comparación de Pronósticos - Datos7",
+     ylab="Índice de ventas nominales", xlab="Periodo")
+lines(ytpron1, type="b", pch=2, lty=2, lwd=2, col="blue")
+lines(ytpron2, type="b", pch=3, lty=2, lwd=2, col="red")
+lines(ytpron3, type="b", pch=4, lty=2, lwd=2, col="green")
+lines(ytpron4, type="b", pch=5, lty=2, lwd=2, col="purple")
+axis(1, at=time(ytnuevo), 
+     labels=paste0(month.abb[cycle(ytnuevo)], "-", 
+                   floor(time(ytnuevo))), cex.axis=0.7)
+legend("topleft", 
+       legend=c("Real", "Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4"),
+       pch=c(19,2,3,4,5), col=c(1,"blue","red","green","purple"),
+       lwd=c(3,2,2,2,2), lty=c(1,2,2,2,2))
+
+# ============================================================================
+# EXPORTAR RESULTADOS A CSV
+# ============================================================================
+
+# Tablas de parámetros estimados
+write.csv2(coeftest(modelo1), 
+           file="datos7_trabajo3_tabla_modelo1.csv", row.names=TRUE)
+write.csv2(coeftest(modelo2), 
+           file="datos7_trabajo3_tabla_modelo2.csv", row.names=TRUE)
+write.csv2(coeftest(modelo3), 
+           file="datos7_trabajo3_tabla_modelo3.csv", row.names=TRUE)
+write.csv2(coeftest(modelo4), 
+           file="datos7_trabajo3_tabla_modelo4.csv", row.names=TRUE)
+
+# Tabla de criterios de ajuste
+tabla.criterios = rbind(Criteriosmodelo1, Criteriosmodelo2, 
+                        Criteriosmodelo3, Criteriosmodelo4)
+rownames(tabla.criterios) = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4")
+write.csv2(tabla.criterios, 
+           file="datos7_trabajo3_criterios_ajuste.csv", row.names=TRUE)
+
+# Tabla de pronósticos
+tabla.pronosticos = cbind(ytpron1, ytpron2, ytpron3, ytpron4)
+colnames(tabla.pronosticos) = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4")
+write.csv2(tabla.pronosticos, 
+           file="datos7_trabajo3_pronosticos.csv", 
+           row.names=paste(floor(time(ytnuevo)), cycle(ytnuevo), sep="/"))
+
+# Tabla de precisión de pronósticos
+precision.puntuales = rbind(
+  accuracy(ytpron1, ytnuevo)[,c(2,3,5)],
+  accuracy(ytpron2, ytnuevo)[,c(2,3,5)],
+  accuracy(ytpron3, ytnuevo)[,c(2,3,5)],
+  accuracy(ytpron4, ytnuevo)[,c(2,3,5)]
+)
+precision.intervalos = rbind(amplcob1, amplcob2, amplcob3, amplcob4)
+scores = c(score1, score2, score3, score4)
+tabla.precision = cbind(precision.puntuales, precision.intervalos, 
+                        ScorePromedio=scores)
+rownames(tabla.precision) = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4")
+write.csv2(tabla.precision, 
+           file="datos7_trabajo3_precision_pronosticos.csv", row.names=TRUE)
+
+# Resumen final
+cat("\n=== RESUMEN TRABAJO 3 - DATOS 7 ===\n")
+cat("\nCRITERIOS DE AJUSTE:\n")
+print(tabla.criterios)
+cat("\nPRECISIÓN DE PRONÓSTICOS:\n")
+print(tabla.precision)
+
+# ============================================================================
+# NOTAS IMPORTANTES:
+# ============================================================================
+# 1. Para los modelos 3 y 4, DEBES ajustar los vectores 'fixed' según lo que
+#    observes en los gráficos de armasubsets
+# 
+# 2. Asegúrate de interpretar correctamente:
+#    - Los patrones de ACF y PACF (cola vs corte, parte regular vs estacional)
+#    - Las pruebas de significancia de parámetros
+#    - La validación de supuestos (ruido blanco y normalidad)
+#
+# 3. Para las conclusiones finales (Punto 6), compara:
+#    - Mejor modelo global del Trabajo 1 (según Tabla 1-b: Modelo 2)
+#    - Mejor modelo local del Trabajo 1 (según Tabla 1-b: Modelo 3)
+#    -# ============================================================================
+# CONTINUACIÓN - PUNTO 6: CONCLUSIONES FINALES
+# ============================================================================
+
+# Según Tabla 1-b del documento:
+# Datos7:
+#   - Mejor global Trabajo 1: Modelo 2
+#   - Mejor local Trabajo 1: Modelo 3
+#   - Mejor Global con error ARMA Trabajo 2: Modelo 2
+
+# ============================================================================
+# COMPARACIÓN CON MEJOR MODELO LOCAL DEL TRABAJO 1
+# ============================================================================
+
+# MODELO LOCAL (Modelo 3 del Trabajo 1) ------------------------------------
+# Según revisión, es Holt-Winters multiplicativo
+# Ajustar con toda la serie hasta n=137
+
+modelo_local = HoltWinters(yt, seasonal="multiplicative")
+
+# Valores ajustados
+ythat_local = fitted(modelo_local)[,1]
+
+# Gráfico del ajuste
+win.graph()
+plot(datos7, main="Ajuste Modelo Local (Holt-Winters)", ylab="Datos7")
+lines(ythat_local, col=2, lwd=2)
+legend("topleft", legend=c("Original", "Ajuste HW"), lty=1, col=1:2)
+
+# Criterios de información
+k_local = 13  # HW multiplicativo: nivel, pendiente, 12 efectos estacionales
+Res.orig_local = yt[13:n] - ythat_local  # HW pierde primeros 12 datos
+Criterios_local = exp.crit.inf.resid(residuales=Res.orig_local, n.par=k_local)
+Criterios_local
+
+# VALIDACIÓN DE SUPUESTOS - MODELO LOCAL -----------------------------------
+residuos_local = yt[13:n] - ythat_local
+
+# Gráficos de residuales
+win.graph()
+layout(matrix(c(1,2), nrow=2))
+plot(residuos_local, main="Residuales Modelo Local", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sd(residuos_local), 2*sd(residuos_local)), lty=2, col=2)
+plot(as.numeric(ythat_local), residuos_local, 
+     main="Residuales vs Ajustados", xlab="Ajustados", ylab="Residuales")
+abline(h=0, lty=1)
+abline(h=c(-2*sd(residuos_local), 2*sd(residuos_local)), lty=2, col=2)
+
+# ACF y PACF
+win.graph()
+layout(matrix(c(1,2), nrow=1))
+acf(as.numeric(residuos_local), ci.type="ma", lag.max=36, 
+    main="ACF Residuales Modelo Local", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+pacf(as.numeric(residuos_local), lag.max=36, 
+     main="PACF Residuales Modelo Local", ci.col=2)
+abline(v=c(12,24,36), lty=2, col=4)
+
+# Test Ljung-Box
+BP.LB.test(residuos_local, maxlag=36, type="Ljung")
+
+# Test de normalidad
+shapiro.test(residuos_local)
+win.graph()
+qqnorm(residuos_local, main="Q-Q Plot Modelo Local")
+qqline(residuos_local, col=2)
+
+# PRONÓSTICOS MODELO LOCAL --------------------------------------------------
+pron_local = predict(modelo_local, n.ahead=12, prediction.interval=TRUE, 
+                     level=0.95)
+ytpron_local = ts(pron_local[,1], freq=12, start=start(ytnuevo))
+LIP_local = ts(pron_local[,2], freq=12, start=start(ytnuevo))
+LSP_local = ts(pron_local[,3], freq=12, start=start(ytnuevo))
+
+# Medidas de precisión
+accuracy(ytpron_local, ytnuevo)
+amplcob_local = amplitud.cobertura(real=ytnuevo, LIP=LIP_local, LSP=LSP_local)
+amplcob_local
+score_local = IntervalScore(real=ytnuevo, LIP=LIP_local, LSP=LSP_local, 
+                            alpha=0.05)
+score_local
+
+# ============================================================================
+# TABLA COMPARATIVA FINAL - TODOS LOS MODELOS
+# ============================================================================
+
+# Ecuaciones teóricas
+cat("\n=== ECUACIONES DE MODELOS COMPARADOS ===\n\n")
+
+cat("TRABAJO 1 - MEJOR GLOBAL (Modelo 2):\n")
+cat("Exponencial polinomial estacional con indicadoras\n")
+cat("Y_t = exp(β₀ + β₁t + Σδᵢ*Iᵢ,t) + E_t\n\n")
+
+cat("TRABAJO 1 - MEJOR LOCAL (Modelo 3):\n")
+cat("Holt-Winters Multiplicativo\n")
+cat("Y_t+h = (β₀,t + β₁,t × h) × Σδᵢ,t*Iᵢ,t+h + E_t+h\n\n")
+
+cat("TRABAJO 2 - MEJOR CON ERROR ARMA (Modelo 2):\n")
+cat("Exponencial polinomial estacional con error ARMA\n")
+cat("Y_t = exp(β₀ + β₁t + Σδᵢ*Iᵢ,t) + E_t\n")
+cat("donde E_t sigue un proceso ARMA(p,q)\n\n")
+
+cat("TRABAJO 3 - MODELOS SARIMA:\n")
+cat("Modelo 1: ARIMA(7,1,0)(0,1,1)[12]\n")
+cat("Modelo 2: ARIMA(3,0,0)(2,1,0)[12] con deriva\n")
+cat("Modelo 3: Identificado con armasubsets\n")
+cat("Modelo 4: Identificado con armasubsets\n\n")
+
+# Tabla de medidas de ajuste
+tabla_ajuste_final = rbind(
+  c(NA, NA),  # Trabajo 1 - Modelo global (no calculado aquí)
+  Criterios_local,
+  c(NA, NA),  # Trabajo 2 (no calculado aquí)
+  Criteriosmodelo1,
+  Criteriosmodelo2,
+  Criteriosmodelo3,
+  Criteriosmodelo4
+)
+rownames(tabla_ajuste_final) = c(
+  "T1-Global", "T1-Local", "T2-ARMA",
+  "T3-Mod1", "T3-Mod2", "T3-Mod3", "T3-Mod4"
+)
+colnames(tabla_ajuste_final) = c("AIC", "BIC")
+
+cat("=== TABLA DE MEDIDAS DE AJUSTE ===\n")
+print(tabla_ajuste_final)
+
+# Tabla de precisión de pronósticos
+precision_final = rbind(
+  c(NA, NA, NA, NA, NA, NA),  # T1-Global
+  c(accuracy(ytpron_local, ytnuevo)[,c(2,3,5)], 
+    amplcob_local[1], amplcob_local[2], score_local),
+  c(NA, NA, NA, NA, NA, NA),  # T2-ARMA
+  c(accuracy(ytpron1, ytnuevo)[,c(2,3,5)], 
+    amplcob1[1], amplcob1[2], score1),
+  c(accuracy(ytpron2, ytnuevo)[,c(2,3,5)], 
+    amplcob2[1], amplcob2[2], score2),
+  c(accuracy(ytpron3, ytnuevo)[,c(2,3,5)], 
+    amplcob3[1], amplcob3[2], score3),
+  c(accuracy(ytpron4, ytnuevo)[,c(2,3,5)], 
+    amplcob4[1], amplcob4[2], score4)
+)
+rownames(precision_final) = c(
+  "T1-Global", "T1-Local", "T2-ARMA",
+  "T3-Mod1", "T3-Mod2", "T3-Mod3", "T3-Mod4"
+)
+colnames(precision_final) = c("MAE", "RMSE", "MAPE", 
+                              "Amplitud", "Cobertura", "Score")
+
+cat("\n=== TABLA DE PRECISIÓN DE PRONÓSTICOS ===\n")
+print(precision_final)
+
+# Exportar tablas finales
+write.csv2(tabla_ajuste_final, 
+           file="datos7_trabajo3_comparacion_ajuste.csv", row.names=TRUE)
+write.csv2(precision_final, 
+           file="datos7_trabajo3_comparacion_pronosticos.csv", row.names=TRUE)
+
+# ============================================================================
+# TABLA RESUMEN VALIDACIÓN DE SUPUESTOS
+# ============================================================================
+
+# Crear tabla resumen manualmente después de revisar todos los resultados
+# Ejemplo de estructura:
+
+tabla_supuestos = data.frame(
+  Modelo = c("T1-Local", "T3-Mod1", "T3-Mod2", "T3-Mod3", "T3-Mod4"),
+  RuidoBlanco = c("Sí/No", "Sí/No", "Sí/No", "Sí/No", "Sí/No"),
+  Normalidad = c("Sí/No/NA", "Sí/No/NA", "Sí/No/NA", "Sí/No/NA", "Sí/No/NA"),
+  Valido = c("Sí/No", "Sí/No", "Sí/No", "Sí/No", "Sí/No")
+)
+
+cat("\n=== TABLA RESUMEN VALIDACIÓN SUPUESTOS ===\n")
+cat("NOTA: Completar con los resultados observados\n")
+print(tabla_supuestos)
+
+# ============================================================================
+# GRÁFICO COMPARATIVO FINAL - MEJOR DE CADA TRABAJO
+# ============================================================================
+
+win.graph()
+plot(ytnuevo, xaxt="n", 
+     ylim=c(min(ytnuevo, ytpron_local, ytpron1)-10,
+            max(ytnuevo, ytpron_local, ytpron1)+10),
+     type="b", pch=19, lwd=3, 
+     main="Comparación Final - Mejores Modelos",
+     ylab="Índice de ventas nominales", xlab="Periodo")
+lines(ytpron_local, type="b", pch=15, lty=2, lwd=2, col="blue")
+lines(ytpron1, type="b", pch=17, lty=2, lwd=2, col="red")
+# Agregar otros modelos si corresponde
+axis(1, at=time(ytnuevo), 
+     labels=paste0(month.abb[cycle(ytnuevo)], "-", 
+                   floor(time(ytnuevo))), cex.axis=0.7)
+legend("topleft", 
+       legend=c("Real", "T1-Local (HW)", "T3-Mejor SARIMA"),
+       pch=c(19,15,17), col=c(1,"blue","red"),
+       lwd=c(3,2,2), lty=c(1,2,2))
+
+# ============================================================================
+# ANÁLISIS Y RECOMENDACIONES FINALES
+# ============================================================================
+
+cat("\n" , rep("=", 70), "\n", sep="")
+cat("ANÁLISIS FINAL Y RECOMENDACIONES\n")
+cat(rep("=", 70), "\n\n", sep="")
+
+cat("PROBLEMAS ENFRENTADOS EN LA MODELACIÓN:\n")
+cat("1. La serie presenta cambios estructurales (punto de quiebre en 2020)\n")
+cat("2. La estacionalidad muestra variaciones de amplitud a lo largo del tiempo\n")
+cat("3. Presencia de componente cíclica que dificulta el ajuste\n")
+cat("4. Tendencia no lineal con cambios de nivel\n\n")
+
+cat("MEJOR MODELO EN AJUSTE:\n")
+cat("Basado en AIC y BIC: [INDICAR MODELO CON MENORES VALORES]\n\n")
+
+cat("MEJOR MODELO EN PRONÓSTICOS:\n")
+cat("Basado en MAE, RMSE, MAPE: [INDICAR MODELO]\n")
+cat("Basado en Cobertura y Amplitud: [INDICAR MODELO]\n\n")
+
+cat("CAPTURA DE LA DINÁMICA DE LA SERIE:\n")
+cat("- Tendencia: [Evaluar qué modelo sigue mejor el cambio de nivel]\n")
+cat("- Estacionalidad: [Evaluar qué modelo captura mejor los picos]\n")
+cat("- Ciclos: [Evaluar si algún modelo captura la componente cíclica]\n")
+cat("- Intervención 2020: [Evaluar manejo del punto de quiebre]\n\n")
+
+cat("VALIDEZ ESTADÍSTICA:\n")
+cat("Solo modelos estadísticamente válidos deben ser considerados\n")
+cat("(RB + Normalidad cumplidos)\n\n")
+
+cat("RECOMENDACIÓN FINAL:\n")
+cat("Para la serie de Prendas de vestir y textiles se recomienda:\n")
+cat("[COMPLETAR SEGÚN ANÁLISIS REALIZADO]\n\n")
+
+cat("TIPO DE MODELACIÓN PREFERIDO:\n")
+cat("- Modelos globales: [Ventajas/desventajas observadas]\n")
+cat("- Modelos locales: [Ventajas/desventajas observadas]\n")
+cat("- Modelos SARIMA: [Ventajas/desventajas observadas]\n\n")
+
+cat("CONFIABILIDAD DE PRONÓSTICOS:\n")
+cat("Los pronósticos son confiables si:\n")
+cat("1. El modelo es estadísticamente válido\n")
+cat("2. La cobertura de los IP es cercana al 95%\n")
+cat("3. La amplitud de los IP es razonable\n")
+cat("4. No hay cambios estructurales esperados en el horizonte\n\n")
+
+# ============================================================================
+# EXPORTAR TODOS LOS PRONÓSTICOS PARA COMPARACIÓN GRÁFICA
+# ============================================================================
+
+# Crear data frame con todos los pronósticos
+todos_pronosticos = data.frame(
+  Fecha = paste(floor(time(ytnuevo)), cycle(ytnuevo), sep="/"),
+  Real = as.numeric(ytnuevo),
+  T1_Local = as.numeric(ytpron_local),
+  T3_Mod1 = as.numeric(ytpron1),
+  T3_Mod2 = as.numeric(ytpron2),
+  T3_Mod3 = as.numeric(ytpron3),
+  T3_Mod4 = as.numeric(ytpron4)
+)
+
+write.csv2(todos_pronosticos, 
+           file="datos7_trabajo3_todos_pronosticos.csv", row.names=FALSE)
+
+cat(rep("=", 70), "\n", sep="")
+cat("CÓDIGO COMPLETADO - ARCHIVOS CSV GENERADOS\n")
+cat(rep("=", 70), "\n\n", sep="")
+
+# ============================================================================
+# INSTRUCCIONES FINALES
+# ============================================================================
+
+cat("PASOS A SEGUIR:\n\n")
+cat("1. REVISAR LOS GRÁFICOS DE ARMASUBSETS:\n")
+cat("   - Identificar correctamente los parámetros en renglones 4 y 6\n")
+cat("   - Ajustar los vectores 'fixed' en modelos 3 y 4\n\n")
+
+cat("2. COMPLETAR LA TABLA DE SUPUESTOS:\n")
+cat("   - Revisar ACF, PACF, Ljung-Box para cada modelo\n")
+cat("   - Determinar si cada modelo cumple RB y Normalidad\n\n")
+
+cat("3. INTERPRETAR RESULTADOS:\n")
+cat("   - Comparar medidas de ajuste (AIC, BIC)\n")
+cat("   - Comparar medidas de precisión (MAE, RMSE, MAPE)\n")
+cat("   - Evaluar cobertura y amplitud de IP\n\n")
+
+cat("4. REDACTAR CONCLUSIONES:\n")
+cat("   - Identificar mejor modelo según cada criterio\n")
+cat("   - Evaluar validez estadística\n")
+cat("   - Considerar capacidad de seguir la dinámica de la serie\n")
+cat("   - Dar recomendación final justificada\n\n")
+
+cat("5. ELABORAR INFORME:\n")
+cat("   - Seguir estructura de la guía del Trabajo 3\n")
+cat("   - Máximo 15 páginas\n")
+cat("   - Usar plantilla PlantillaTrabajosv06.docx\n")
+cat("   - Incluir todas las tablas requeridas (Apéndices I, J, K)\n\n")
+
+cat("ARCHIVOS CSV GENERADOS:\n")
+cat("- datos7_trabajo3_tabla_modelo1.csv\n")
+cat("- datos7_trabajo3_tabla_modelo2.csv\n")
+cat("- datos7_trabajo3_tabla_modelo3.csv\n")
+cat("- datos7_trabajo3_tabla_modelo4.csv\n")
+cat("- datos7_trabajo3_criterios_ajuste.csv\n")
+cat("- datos7_trabajo3_pronosticos.csv\n")
+cat("- datos7_trabajo3_precision_pronosticos.csv\n")
+cat("- datos7_trabajo3_comparacion_ajuste.csv\n")
+cat("- datos7_trabajo3_comparacion_pronosticos.csv\n")
+cat("- datos7_trabajo3_todos_pronosticos.csv\n\n")
+
+cat("¡TRABAJO 3 FINALIZADO!\n")
+cat("Recuerda revisar y ajustar según tus observaciones específicas\n")
