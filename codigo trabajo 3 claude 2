@@ -75,7 +75,7 @@ abline(v = seq(12, 36, by = 12), col = 2, lty = 2)
 
 # ACF de ∇₁₂log(Yt)
 win.graph(width = 4, height = 3.5)
-acf(as.numeric(diff(log(yt), 12)), ci.type = "ma", lag.max = 36, main = "", 
+acf(as.numeric(diff((yt), 12)), ci.type = "ma", lag.max = 36, main = "", 
     lwd = 3, cex.lab = 0.8, cex.axis = 0.6)
 title(main = expression(paste("ACF de", sep = " ", nabla[12], sep = "", log(Y[t]))), 
       cex.main = 1)
@@ -301,9 +301,9 @@ print("=== AJUSTANDO MODELO 3: armasubsets renglón 4 ===")
 # AJUSTA LOS PARÁMETROS SEGÚN TU IDENTIFICACIÓN
 
 modelo3 = Arima(log(yt), 
-                order = c(2, 1, 1), 
-                seasonal = list(order = c(1, 1, 1)),
-                fixed = c(NA, NA, NA, NA, NA),  # AJUSTAR según identificación
+                order = c(7, 1, 9), 
+                seasonal = list(order = c(1, 1, 2)),
+                fixed = c(0, NA,rep(0,4),NA,rep(0,4),NA,rep(0,3),NA,NA,NA,NA),  
                 method = "ML")
 
 print("Parámetros estimados Modelo 3:")
@@ -365,11 +365,11 @@ print("=== AJUSTANDO MODELO 4: armasubsets renglón 6 ===")
 # Según el armasubsets del Apéndice F para Datos7, renglón 6:
 # AJUSTA LOS PARÁMETROS SEGÚN TU IDENTIFICACIÓN
 
-modelo4 = Arima(log(yt), 
-                order = c(3, 1, 2),  # AJUSTAR
-                seasonal = list(order = c(1, 1, 1)),  # AJUSTAR
-                fixed = c(NA, NA, NA, NA, NA, NA),  # AJUSTAR según identificación
-                method = "ML")
+modelo4 = Arima(log(yt),
+                     order = c(10, 1, 7),
+                     seasonal = list(order = c(0, 1, 1)),
+                     fixed = c(NA,NA,0,0,NA,0,NA,0,0,NA,rep(0,6),NA,NA),
+                     method = "ML")
 
 print("Parámetros estimados Modelo 4:")
 print(coeftest(modelo4))
